@@ -68,7 +68,7 @@ async function sendToTab(tab, msg) {
     // No reader in this tab yet.
   }
   try {
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['math-speech.js', 'content.js'] });
     await chrome.tabs.sendMessage(tab.id, msg);
   } catch (err) {
     // chrome:// pages, the Web Store and Chrome's PDF viewer can't be scripted.

@@ -20,6 +20,9 @@
   // Inside a block, text under these is never spoken (e.g. Wikipedia's "[1]" and "[edit]").
   const TEXT_SKIP_SEL = 'script,style,noscript,svg,math,template,button,select,textarea,' +
     '[aria-hidden="true"],sup.reference,.mw-editsection';
+  // Equations, spoken as words by math-speech.js (Wikipedia, MathJax, KaTeX, plain MathML).
+  const MATH_SEL = '.mwe-math-element,mjx-container,.katex,.MathJax,math';
+  const MATH = typeof VoiceReaderMath !== 'undefined' ? VoiceReaderMath : null;
 
   const ABBREVIATION_END = /(?:^|[\s(])(?:[A-Z]|Dr|Mr|Mrs|Ms|Prof|St|Jr|Sr|vs|etc|e\.g|i\.e|No|Fig|pp?)\.\s*$/;
   const MAX_CHUNK = 220; // long sentences are split so each utterance stays short
@@ -51,6 +54,7 @@
   let ui = null;
   let sentenceHL = null;
   let wordHL = null;
+  const marked = { sentence: [], word: [] }; // equations to draw boxes over (see drawMarks)
   let segmenter = null;
 
   // ---------- Finding the readable text ----------
@@ -155,20 +159,44 @@
     return stop;
   }
 
+  // A block's spoken text, with segments mapping each stretch of it back to the page:
+  //   { node, start, end, nodeStart }               text spoken as written
+  //   { node, start, end, nodeStart, nodeEnd, atom } a symbol spoken as words (α -> "alpha")
+  //   { el, start, end, atom }                       an equation spoken as words
+  // Atoms are highlighted as a whole while any of their words is spoken.
   function buildModel(el) {
     const segs = [];
     let text = '';
     let lastBlock = null;
     let pendingBreak = false;
+    let inEquation = null;
+    const nameSymbols = MATH && !/^el\b/i.test(document.documentElement.lang || '');
     const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, {
       acceptNode(n) {
         if (n.nodeType === Node.TEXT_NODE) return NodeFilter.FILTER_ACCEPT;
         if (n.tagName === 'BR') return NodeFilter.FILTER_ACCEPT;
+        if (MATH && n.matches(MATH_SEL)) return isVisible(n) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
         if (n.matches(TEXT_SKIP_SEL) || !isVisible(n)) return NodeFilter.FILTER_REJECT;
         return NodeFilter.FILTER_SKIP;
       },
     });
+    const space = (data) => {
+      if (text && !/\s$/.test(text) && !/^\s/.test(data)) text += ' ';
+    };
     for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      if (inEquation?.contains(n)) continue;
+      if (n.nodeType !== Node.TEXT_NODE && n.tagName !== 'BR') {
+        // An equation: speak it as words.
+        inEquation = n;
+        const spoken = MATH.equationToSpeech(n);
+        if (!spoken) continue;
+        space(spoken);
+        segs.push({ el: n, start: text.length, end: text.length + spoken.length, atom: true });
+        text += spoken;
+        lastBlock = null;
+        pendingBreak = true;
+        continue;
+      }
       if (n.nodeType !== Node.TEXT_NODE) {
         pendingBreak = true;
         continue;
@@ -177,13 +205,42 @@
       if (!data) continue;
       const block = layoutBlock(n.parentElement, el);
       // Keep words in separate boxes (or across a <br>) from running together.
-      if (text && (pendingBreak || block !== lastBlock) && !/\s$/.test(text) && !/^\s/.test(data)) text += ' ';
-      segs.push({ node: n, start: text.length, end: text.length + data.length });
-      text += data;
+      if (pendingBreak || block !== lastBlock) space(data);
+      let from = 0;
+      for (const sym of nameSymbols ? MATH.textSymbols(data) : []) {
+        if (sym.index > from) {
+          segs.push({ node: n, start: text.length, end: text.length + sym.index - from, nodeStart: from });
+          text += data.slice(from, sym.index);
+        }
+        segs.push({ node: n, start: text.length, end: text.length + sym.spoken.length,
+          nodeStart: sym.index, nodeEnd: sym.index + sym.length, atom: true });
+        text += sym.spoken;
+        from = sym.index + sym.length;
+      }
+      if (from < data.length) {
+        segs.push({ node: n, start: text.length, end: text.length + data.length - from, nodeStart: from });
+        text += data.slice(from);
+      }
       lastBlock = block;
       pendingBreak = false;
     }
     return { el, text, segs };
+  }
+
+  // Where a DOM position falls in a model's spoken text.
+  function modelOffset(model, node, offset) {
+    for (const s of model.segs) {
+      if (s.el) {
+        if (s.el.contains(node)) return s.start;
+        continue;
+      }
+      if (s.node !== node) continue;
+      if (s.atom ? offset < s.nodeEnd : offset < s.nodeStart + (s.end - s.start)) {
+        return s.atom ? s.start : s.start + Math.max(0, offset - s.nodeStart);
+      }
+    }
+    const last = [...model.segs].reverse().find((s) => s.node === node);
+    return last ? last.end : 0;
   }
 
   function sentenceSegmenter() {
@@ -245,8 +302,7 @@
     for (let i = 0; i < q.length; i++) {
       const model = q[i].model;
       if (!model.el.contains(node)) continue;
-      const seg = model.segs.find((s) => s.node === node);
-      const off = seg ? seg.start + offset : 0;
+      const off = modelOffset(model, node, offset);
       for (let j = i; j < q.length && q[j].model === model; j++) {
         if (q[j].end > off) return j;
       }
@@ -323,7 +379,7 @@
     if (rebuildQueue()) {
       if (state.playing) speakCurrent();
       else if (state.queue[state.idx]) highlightSentence(state.queue[state.idx]);
-      else sentenceHL?.clear();
+      else clearHighlights();
     }
     renderMap();
     updateUI();
@@ -341,18 +397,29 @@
 
   // ---------- Highlighting (CSS Custom Highlight API: no changes to the page's DOM) ----------
 
+  // DOM position for an offset inside a segment. Atoms only have a start and an end.
+  function boundary(s, off, atEnd) {
+    if (s.el) {
+      const parent = s.el.parentNode;
+      const i = Array.prototype.indexOf.call(parent.childNodes, s.el);
+      return [parent, atEnd ? i + 1 : i];
+    }
+    if (s.atom) return [s.node, atEnd ? s.nodeEnd : s.nodeStart];
+    return [s.node, s.nodeStart + off - s.start];
+  }
+
   function posAt(model, off, atEnd) {
     const segs = model.segs;
     for (const s of segs) {
-      if (atEnd ? off > s.start && off <= s.end : off >= s.start && off < s.end) return [s.node, off - s.start];
+      if (atEnd ? off > s.start && off <= s.end : off >= s.start && off < s.end) return boundary(s, off, atEnd);
     }
     if (atEnd) {
-      for (let i = segs.length - 1; i >= 0; i--) if (segs[i].end <= off) return [segs[i].node, segs[i].node.length];
+      for (let i = segs.length - 1; i >= 0; i--) if (segs[i].end <= off) return boundary(segs[i], segs[i].end, true);
     } else {
-      for (const s of segs) if (s.start >= off) return [s.node, 0];
+      for (const s of segs) if (s.start >= off) return boundary(s, s.start, false);
     }
     const last = segs[segs.length - 1];
-    return [last.node, last.node.length];
+    return boundary(last, last.end, true);
   }
 
   function makeRange(model, start, end) {
@@ -379,9 +446,12 @@
       '::highlight(voice-reader-sentence){background-color:rgba(255,213,79,.35);}' +
       '::highlight(voice-reader-word){background-color:#ffd54f;color:#111;}';
     (document.head || document.documentElement).appendChild(style);
+    window.addEventListener('resize', drawMarks);
   }
 
   function removeHighlights() {
+    clearHighlights();
+    window.removeEventListener('resize', drawMarks);
     if (!sentenceHL) return;
     CSS.highlights.delete('voice-reader-sentence');
     CSS.highlights.delete('voice-reader-word');
@@ -389,10 +459,32 @@
     sentenceHL = wordHL = null;
   }
 
+  function clearHighlights() {
+    sentenceHL?.clear();
+    wordHL?.clear();
+    marked.sentence = [];
+    marked.word = [];
+    drawMarks();
+  }
+
+  function clearWordHighlight() {
+    wordHL?.clear();
+    marked.word = [];
+    drawMarks();
+  }
+
+  // Equations in a stretch of an item's model text.
+  function equationsIn(item, start, end) {
+    return item.model.segs.filter((s) => s.el && s.start < end && s.end > start).map((s) => s.el);
+  }
+
   function highlightSentence(item) {
     if (!sentenceHL) return;
     sentenceHL.clear();
     wordHL.clear();
+    marked.sentence = equationsIn(item, item.start, item.end);
+    marked.word = [];
+    drawMarks();
     const r = makeRange(item.model, item.start, item.end);
     if (!r) return;
     sentenceHL.add(r);
@@ -402,8 +494,43 @@
   function highlightWord(item, start, end) {
     if (!wordHL) return;
     wordHL.clear();
+    const eqs = equationsIn(item, item.start + start, item.start + end);
+    if (eqs.length !== marked.word.length || eqs.some((el, i) => el !== marked.word[i])) {
+      marked.word = eqs;
+      drawMarks();
+    }
     const r = makeRange(item.model, item.start + start, item.start + end);
     if (r) wordHL.add(r);
+  }
+
+  // Highlights only color text, and equations are often images, so boxes are drawn over them.
+  function drawMarks() {
+    let layer = document.getElementById('voice-reader-marks');
+    if (!marked.sentence.length && !marked.word.length) {
+      layer?.remove();
+      return;
+    }
+    if (!layer) {
+      layer = document.createElement('div');
+      layer.id = 'voice-reader-marks';
+      // The layer itself blends with the page, so the equation shows through the yellow.
+      layer.style.cssText = 'all:initial;position:absolute;left:0;top:0;width:0;height:0;z-index:2147483646;' +
+        'pointer-events:none;mix-blend-mode:multiply;';
+      document.documentElement.appendChild(layer);
+    }
+    const box = (el, strong) => {
+      const img = el.querySelector('img');
+      const r = (img && isVisible(img) ? img : el).getBoundingClientRect();
+      const b = document.createElement('div');
+      b.style.cssText = `position:absolute;left:${r.left + scrollX - 2}px;top:${r.top + scrollY - 1}px;` +
+        `width:${r.width + 4}px;height:${r.height + 2}px;border-radius:3px;` +
+        `background:${strong ? '#ffd54f' : 'rgba(255,213,79,.35)'};`;
+      return b;
+    };
+    layer.replaceChildren(
+      ...marked.sentence.filter((el) => !marked.word.includes(el)).map((el) => box(el, false)),
+      ...marked.word.map((el) => box(el, true)),
+    );
   }
 
   function scrollIntoViewIfNeeded(el, range) {
@@ -633,7 +760,7 @@
     clearTimers();
     state.playing = false;
     if (stopEngine) send({ type: 'stop' });
-    wordHL?.clear();
+    clearWordHighlight();
     updateUI();
   }
 
@@ -642,8 +769,7 @@
     clearTimers();
     state.playing = false;
     state.idx = state.queue.length;
-    sentenceHL?.clear();
-    wordHL?.clear();
+    clearHighlights();
     updateUI();
     setStatus('Finished');
   }
