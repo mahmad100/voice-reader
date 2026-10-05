@@ -10,6 +10,7 @@ My own Speechify replacement: a Chrome extension that reads pages aloud with sen
 | v0.2 | Natural AI voices (Kokoro, runs on the laptop's GPU) | ✅ Confirmed working in Chrome (Heart, 1× and 2×) |
 | v0.3 | Page map: list of sections to tick, untick, and jump to | ✅ Tested in Chrome |
 | v0.4 | Math read aloud (equations, Greek letters, symbols), with a box over equations | ✅ Tested in Chrome on "Mass–energy equivalence" |
+| v0.5 | Click to read, read just a selection, paragraph play buttons, Options panel (line focus, wider spacing, highlight colors, follow along) | ✅ Tested in Chrome. ⚠️ 4 last fixes not yet tried, see below |
 
 ## Session 1 (2026-10-05)
 
@@ -45,13 +46,35 @@ My own Speechify replacement: a Chrome extension that reads pages aloud with sen
 - Equations get a yellow box over them, since they're images. The word box follows the voice: "E equals m c squared" lights up the equation for its ~2 s.
 - Fixed: the box first hid the equation, because the blend only worked inside the overlay. Now the overlay layer itself blends with the page.
 
+**Fixed:** the page map popped up on every page, because "map open" was remembered from testing. It now always starts closed.
+
+**Researched Speechify and NaturalReader:**
+- Speechify: click to listen, a play button on selected text, "Read Selection", skip-content switches.
+- NaturalReader: Click to Read with a hover highlight, Highlight to Read with a minimum length, a separate switch for each.
+- Nielsen Norman Group timing for anything shown on hover: show after 0.3–0.5 s at rest, hide 0.5 s after leaving.
+- For dyslexia: wider letter spacing has the best evidence (Zorzi et al., PNAS 2012: ~20% faster, half the errors). Line focus comes from Immersive Reader. OpenDyslexic showed no benefit (Wery & Diliberto 2017), so no special font.
+
+**Built v0.5: starting where you point, and reading options**
+- Click to read from the exact word, with a dotted underline preview. Text outside the article gets a temporary "Clicked text" section instead of replacing the map.
+- Selection play button, in the highlight color: reads just the selection, then "Finished selection".
+- Paragraph play buttons (off by default), using the NN/g timings.
+- ⚙ Options panel on the bar: a switch for each of these, plus follow along with "Back to reading", line focus, wider spacing (WCAG values), and highlight color and style.
+- Right-click menu: added *Read selected text* next to *Read aloud from here*.
+- The user asked for no extra shortcuts. Alt+Shift+M/O/X were removed: they clash with Wikipedia's own Alt+Shift shortcuts (O opened "Log in", X opens a random article).
+- Tested in Chrome on "Mass–energy equivalence": the click preview and click-to-read, clicking text outside the article, selection reading, the paragraph button appearing after 0.45 s, line focus, spacing, green highlight, and "Back to reading".
+
 ## Next session: start here
 
-1. **Listen to math on a few more pages** and tune the wording: Wikipedia "Normal distribution", "Schrödinger equation", "Quadratic formula". Things to consider:
-   - Saying "capital" for capital Greek letters (Δ vs δ)? Right now both are just "delta".
-   - Absolute value bars |x| are silent.
-2. AI voice jump latency: after a jump, sentences already being read ahead finish generating first (up to ~3 s). Could cancel in-progress read-ahead.
-3. Other ideas: tables read row by row, PDF support (PDF.js), Google Docs, true pause/resume, auto-scroll switch, highlight colors.
+1. **Reload the extension and check the four fixes made after testing** (all in the code, none tried in Chrome yet):
+   - Starting mid-sentence (click or selection) with an AI voice took 25+ s, because the voice prepared sentences strictly in order. `offscreen.js` now puts what you're waiting for first. Expected: a 1–3 s wait at most.
+   - The paragraph play button never went away if the pointer kept moving after leaving the paragraph. It now goes 0.5 s after leaving.
+   - Line focus dimmed the whole page while scrolled away from the sentence being read. It now steps aside.
+   - A reader left open during an extension reload got stuck in an endless loop of errors (an old bug).
+2. My tests switched on line focus, wider spacing and a green highlight in the user's settings. Switch them back in Options if not wanted.
+3. **Listen to math on a few more pages** and tune the wording: Wikipedia "Normal distribution", "Schrödinger equation", "Quadratic formula". Open questions: say "capital" for Δ vs δ? Absolute value bars |x| are silent.
+4. Other ideas: skip-content switches (citations, brackets, URLs), tables read row by row, PDF support (PDF.js), Google Docs, true pause/resume.
+
+**Testing note:** my Chrome tool can't press browser-level shortcuts or the toolbar icon, and Alt+Shift+letter keys hit the page's own shortcuts. The user has to reload the extension and click the icon; after that I can drive the player bar.
 
 ## Where things live
 

@@ -19,14 +19,35 @@ After changing any file, click the reload arrow on the extension's card in `chro
 | --- | --- |
 | Read the page | Click the toolbar icon, or press **Alt+Shift+R** |
 | Pause / resume | Same again, or the big button on the player bar |
-| Read from a spot | Select some text first, or **Alt+click** any paragraph |
-| Read from a selection | Right-click selected text → *Read aloud from here* |
-| Page map | **Alt+Shift+M**, or the list button on the bar |
+| Read from a word | With the player open, **click** any text (see *Starting where you point*) |
+| Read just some text | Select it, then press the play button that appears next to it, or right-click → *Read selected text* |
+| Read on from a selection | Right-click selected text → *Read aloud from here* |
+| Read from a paragraph | **Alt+click** it, or turn on paragraph play buttons in Options |
 | Previous / next sentence | **Alt+Shift+←** / **Alt+Shift+→** |
 | Slower / faster | **Alt+Shift+↓** / **Alt+Shift+↑**, or **−** / **+** on the bar |
-| Close the player | **Alt+Shift+X**, or **×** on the bar |
+| Page map / Options | The list and ⚙ buttons on the bar |
+| Close the player | **×** on the bar |
 
-Your speed and voice are remembered. The page map starts closed. To change the start/pause shortcut, go to `chrome://extensions/shortcuts`.
+Your speed, voice and Options choices are remembered. The page map and Options panels start closed. To change the start/pause shortcut, go to `chrome://extensions/shortcuts`.
+
+## Starting where you point
+
+Modeled on Speechify and NaturalReader. Each one can be switched on or off in **Options** (⚙ on the bar).
+
+- **Click to read** (on by default): with the player open, click any text and reading starts from that word. A dotted underline shows where a click would start. Links, buttons and text boxes keep working as usual. A double-click still just selects a word. Text outside the article (a caption, a sidebar) works too: it's added to the page map as "Clicked text" instead of replacing the map.
+- **Play button on selected text** (on by default): select at least a few characters and, once you let go of the mouse, a play button appears next to the selection in your highlight color. It reads just the selection, then stops at "Finished selection". Pressing play again carries on from just after it.
+- **Play buttons beside paragraphs** (off by default): rest the pointer on a paragraph and a blue play button appears in its margin. It doesn't appear for the paragraph already being read.
+
+Buttons that appear on hover follow the Nielsen Norman Group's timing guidance, so they don't flicker as the pointer passes over the page: they show after the pointer has rested for 0.4 s, and go 0.5 s after it leaves.
+
+## Options for easier reading
+
+Choices aimed at dyslexic readers, all in **Options**:
+
+- **Follow along:** the page scrolls with the reading. If you scroll away by hand, it stops following and a **Back to reading** button appears. It also picks up again by itself once the sentence being read is back on screen.
+- **Line focus:** dims the page except the sentence being read (like Microsoft Immersive Reader). It steps aside while you've scrolled away.
+- **Wider text spacing:** more space between letters, words and lines in the article, using the WCAG text-spacing values. Extra letter spacing is the change with the best evidence for dyslexic readers ([Zorzi et al., PNAS 2012](https://pubmed.ncbi.nlm.nih.gov/22665803/)). Special "dyslexia fonts" like OpenDyslexic showed no benefit in studies, so there isn't one.
+- **Highlight:** yellow, green, blue or pink, for the sentence and word, the sentence only, or the word only.
 
 ## Page map
 
@@ -60,10 +81,11 @@ The voice menu's first group, **Natural AI voices**, uses [Kokoro](https://huggi
 ## How it works
 
 - `background.js` speaks through Chrome's `chrome.tts` engine and passes its progress events back to the page.
-- `content.js` finds the article text (skipping menus, sidebars, fact boxes, and reference lists), groups it into sections at each heading for the page map, splits it into sentences, highlights them with the CSS Custom Highlight API (the page itself isn't modified), and draws the player bar.
+- `content.js` finds the article text (skipping menus, sidebars, fact boxes, and reference lists), groups it into sections at each heading for the page map, splits it into sentences, highlights them with the CSS Custom Highlight API, and draws the player bar, the Options panel and the play buttons. The page itself isn't modified, except for one attribute on the article while wider spacing is on.
+- Reading can start or stop partway through a sentence (a clicked word, the end of a selection). That part is spoken as its own piece, and highlighted from the right place.
 - Voices that report word positions (for example the Windows "Microsoft …" voices) get exact word highlighting. For voices that don't (for example "Google US English"), the highlight follows an estimate based on that voice's measured speaking speed. For AI voices, the estimate is timed against the exact length of each audio clip.
 - `math-speech.js` turns equations (MathML) and math symbols into spoken English. It is injected just before `content.js`, which keeps two versions of the text: what's spoken, and where each part sits on the page, so an equation spoken as several words is highlighted as one unit.
-- `offscreen/` holds the AI voice engine: a hidden extension page (`offscreen.js`) that runs Kokoro on the GPU and plays the audio. `kokoro.bundle.js` and `ort/` are generated files; don't edit them by hand.
+- `offscreen/` holds the AI voice engine: a hidden extension page (`offscreen.js`) that runs Kokoro on the GPU and plays the audio. It makes one clip at a time: what the reader is waiting to hear goes first, and read-ahead comes after. `kokoro.bundle.js` and `ort/` are generated files; don't edit them by hand.
 
 ### Rebuilding the AI voice bundle
 
@@ -75,17 +97,18 @@ npm update kokoro-js
 node build.mjs
 ```
 
-## Known limits (v0.4)
+## Known limits (v0.5)
 
 - **Can't run on:** Chrome's built-in PDF viewer, `chrome://` pages, or the Chrome Web Store. Google Docs draws its text in a way the extension can't read yet.
 - **Speed limits:** Google voices top out around 2× speed. Windows voices go faster.
 - **Pause:** resuming starts the current sentence again.
 - **Math:** matrices and multi-line derivations are read row by row, and very long equations can be hard to follow by ear. Equation boxes don't follow equations inside separately scrolling areas.
-- **AI voice after a jump:** the first sentence can take a few seconds, because sentences already being prepared ahead finish first.
+- **AI voice after a jump:** if a sentence is already being generated, it finishes first (about 1–3 s).
+- **Keyboard shortcuts:** only Alt+Shift+R and Alt+Shift+arrows. Alt+Shift+letter keys belong to many sites (on Wikipedia, Alt+Shift+O opens "Log in").
 
 ## Ideas for next versions
 
 - Reading tables row by row, and image descriptions
 - PDF support with PDF.js
 - Google Docs support
-- Turning auto-scroll on/off, and changing highlight colors
+- Skip-content switches (citations, brackets, URLs), like Speechify's

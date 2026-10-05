@@ -4,6 +4,7 @@
 
 const MENU_PAGE = 'vr-read-page';
 const MENU_SELECTION = 'vr-read-selection';
+const MENU_SELECTION_ONLY = 'vr-read-selection-only';
 
 // Natural voices generated on this computer by the Kokoro model (see offscreen/offscreen.js).
 const AI_VOICES = [
@@ -45,6 +46,7 @@ async function stopAll() {
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({ id: MENU_PAGE, title: 'Read this page aloud', contexts: ['page'] });
+  chrome.contextMenus.create({ id: MENU_SELECTION_ONLY, title: 'Read selected text', contexts: ['selection'] });
   chrome.contextMenus.create({ id: MENU_SELECTION, title: 'Read aloud from here', contexts: ['selection'] });
 });
 
@@ -55,7 +57,8 @@ chrome.commands.onCommand.addListener((command, tab) => {
 });
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
-  sendToTab(tab, { type: info.menuItemId === MENU_SELECTION ? 'readSelection' : 'readPage' });
+  const type = { [MENU_SELECTION]: 'readSelection', [MENU_SELECTION_ONLY]: 'readSelectionOnly' }[info.menuItemId] || 'readPage';
+  sendToTab(tab, { type });
 });
 
 // Deliver a command to the tab's reader, injecting it first if it isn't there yet.

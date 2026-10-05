@@ -35,10 +35,32 @@
 
   // ---------- State ----------
 
-  const settings = { rate: 1, voiceName: null };
+  // Remembered between pages (chrome.storage.sync). Changed in the Options panel.
+  const DEFAULT_SETTINGS = {
+    rate: 1, voiceName: null,
+    clickToRead: true,        // click any text to read from that word
+    selectionButton: true,    // a play button next to selected text, which reads just that text
+    paragraphButtons: false,  // a play button beside the paragraph under the pointer
+    follow: true,             // scroll along with the reading
+    lineFocus: false,         // dim everything except the sentence being read
+    wideSpacing: false,       // wider letter, word and line spacing in the article
+    hlColor: 'yellow',
+    hlStyle: 'both',          // 'both', 'sentence' or 'word'
+  };
+  const settings = { ...DEFAULT_SETTINGS };
+  const HL_COLORS = {
+    yellow: { name: 'Yellow', word: '#ffd54f', sentence: 'rgba(255,213,79,.35)' },
+    green: { name: 'Green', word: '#a8e6a1', sentence: 'rgba(129,212,120,.32)' },
+    blue: { name: 'Blue', word: '#a7d4ff', sentence: 'rgba(120,180,255,.32)' },
+    pink: { name: 'Pink', word: '#ffb8d9', sentence: 'rgba(255,150,200,.32)' },
+  };
   const state = {
     sections: [],     // [{ title, level, blocks, enabled, items }] for the page map
     queue: [],        // [{ model, start, end, text, sec }] from the ticked sections
+    current: null,    // what's being spoken: a queue item, or the part of one from a word on
+    limit: null,      // { item, end }: reading only a selection stops here
+    detached: false,  // the reader scrolled away by hand, so stop following until "Back to reading"
+    sentenceRange: null,
     idx: 0,
     playing: false,
     gen: 0,           // bumped on every speak/stop so stale engine events are ignored
@@ -54,6 +76,8 @@
   let ui = null;
   let sentenceHL = null;
   let wordHL = null;
+  let hoverHL = null;    // click to read: underlines where a click would start reading
+  let contentRoot = null; // the article element, for wider spacing
   const marked = { sentence: [], word: [] }; // equations to draw boxes over (see drawMarks)
   let segmenter = null;
 
@@ -122,6 +146,7 @@
   // ends ("References", "External links", ...), or -1 if there isn't one.
   function collectBlocks() {
     const root = findContentRoot();
+    contentRoot = root;
     const isBody = root === document.body;
     const blocks = findCandidates(root).filter((el) => {
       const footer = el.closest(FOOTER_SEL);
@@ -228,15 +253,15 @@
   }
 
   // Where a DOM position falls in a model's spoken text.
-  function modelOffset(model, node, offset) {
+  function modelOffset(model, node, offset, atEnd = false) {
     for (const s of model.segs) {
       if (s.el) {
-        if (s.el.contains(node)) return s.start;
+        if (s.el.contains(node)) return atEnd ? s.end : s.start;
         continue;
       }
       if (s.node !== node) continue;
       if (s.atom ? offset < s.nodeEnd : offset < s.nodeStart + (s.end - s.start)) {
-        return s.atom ? s.start : s.start + Math.max(0, offset - s.nodeStart);
+        return s.atom ? (atEnd ? s.end : s.start) : s.start + Math.max(0, offset - s.nodeStart);
       }
     }
     const last = [...model.segs].reverse().find((s) => s.node === node);
@@ -346,11 +371,13 @@
   }
 
   function loadSections() {
+    state.limit = null;
     state.sections = buildSections();
     state.queue = [];
     state.idx = 0;
     rebuildQueue();
     renderMap();
+    if (settings.wideSpacing) applyDisplaySettings(); // the article has just been found
   }
 
   // Rebuild the queue from the ticked sections, staying on the current sentence if it's still
@@ -388,11 +415,48 @@
   function jumpToSection(sec) {
     const first = sectionItems(sec)[0];
     if (!first) return;
+    state.limit = null;
+    state.detached = false;
     sec.enabled = true;
     rebuildQueue();
     state.idx = state.queue.indexOf(first);
     renderMap();
-    speakCurrent();
+    speakCurrent(first.start);
+  }
+
+  // Text outside the detected article (a caption, a fact box, a sidebar): add it to the map as
+  // its own section, in page order, so reading it doesn't throw the map away. Reading carries
+  // on into the article after it. Only one is kept at a time.
+  function addTempSection(blocks, title) {
+    if (!blocks.length) return null;
+    const sections = state.sections.filter((x) => !x.temp);
+    const sec = makeSection(title, Math.min(2, ...sections.map((x) => x.level)), blocks, true);
+    sec.temp = true;
+    let at = sections.findIndex((x) => x.blocks[0] && (blocks[0].compareDocumentPosition(x.blocks[0]) & Node.DOCUMENT_POSITION_FOLLOWING));
+    if (at < 0) at = sections.length;
+    sections.splice(at, 0, sec);
+    state.sections = sections;
+    rebuildQueue();
+    renderMap();
+    return sec;
+  }
+
+  // The nearest block (paragraph, cell, caption...) around a text node, if it's a sensible size.
+  function blockAround(node) {
+    const el = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+    const block = el && layoutBlock(el, document.body);
+    if (!block || block === document.body || block === document.documentElement) return null;
+    return block;
+  }
+
+  // A sentence and the offset in it for a DOM position, searching every section.
+  function locate(node, offset, atEnd = false) {
+    const all = state.sections.flatMap(sectionItems);
+    const i = findIn(all, node, offset);
+    if (i < 0) return null;
+    const item = all[i];
+    const off = modelOffset(item.model, node, offset, atEnd);
+    return { item, off: Math.max(item.start, Math.min(item.end, off)) };
   }
 
   // ---------- Highlighting (CSS Custom Highlight API: no changes to the page's DOM) ----------
@@ -438,25 +502,87 @@
     sentenceHL = new Highlight();
     wordHL = new Highlight();
     wordHL.priority = 1;
+    hoverHL = new Highlight();
+    hoverHL.priority = 2;
     CSS.highlights.set('voice-reader-sentence', sentenceHL);
     CSS.highlights.set('voice-reader-word', wordHL);
+    CSS.highlights.set('voice-reader-hover', hoverHL);
     const style = document.createElement('style');
     style.id = 'voice-reader-style';
-    style.textContent =
-      '::highlight(voice-reader-sentence){background-color:rgba(255,213,79,.35);}' +
-      '::highlight(voice-reader-word){background-color:#ffd54f;color:#111;}';
     (document.head || document.documentElement).appendChild(style);
-    window.addEventListener('resize', drawMarks);
+    applyDisplaySettings();
+    window.addEventListener('resize', onResize);
   }
 
   function removeHighlights() {
     clearHighlights();
-    window.removeEventListener('resize', drawMarks);
+    window.removeEventListener('resize', onResize);
+    document.querySelector('[data-voice-reader-root]')?.removeAttribute('data-voice-reader-root');
+    document.getElementById('voice-reader-focus')?.remove();
     if (!sentenceHL) return;
     CSS.highlights.delete('voice-reader-sentence');
     CSS.highlights.delete('voice-reader-word');
+    CSS.highlights.delete('voice-reader-hover');
     document.getElementById('voice-reader-style')?.remove();
-    sentenceHL = wordHL = null;
+    sentenceHL = wordHL = hoverHL = null;
+  }
+
+  // Wider spacing uses WCAG's text spacing values (1.4.12); extra letter spacing is the change
+  // with the best evidence of helping dyslexic readers (Zorzi et al., PNAS 2012).
+  const SPACING_CSS =
+    '[data-voice-reader-root] :is(p,li,dd,dt,blockquote,td,th,figcaption,caption){letter-spacing:.12em!important;' +
+    'word-spacing:.16em!important;line-height:1.8!important;}' +
+    '[data-voice-reader-root] :is(h1,h2,h3,h4,h5,h6){letter-spacing:.06em!important;}';
+
+  // Highlight colors and style, wider spacing and line focus, from the settings.
+  function applyDisplaySettings() {
+    const style = document.getElementById('voice-reader-style');
+    if (style) {
+      const c = HL_COLORS[settings.hlColor] || HL_COLORS.yellow;
+      style.textContent =
+        (settings.hlStyle !== 'word' ? `::highlight(voice-reader-sentence){background-color:${c.sentence};}` : '') +
+        (settings.hlStyle !== 'sentence' ? `::highlight(voice-reader-word){background-color:${c.word};color:#111;}` : '') +
+        '::highlight(voice-reader-hover){text-decoration:underline 2px dotted #4f8cff;text-underline-offset:4px;}' +
+        (settings.wideSpacing ? SPACING_CSS : '');
+    }
+    const spaced = document.querySelector('[data-voice-reader-root]');
+    const root = settings.wideSpacing && ui ? contentRoot : null;
+    if (spaced !== root) {
+      spaced?.removeAttribute('data-voice-reader-root');
+      root?.setAttribute('data-voice-reader-root', '');
+    }
+    // Spacing moves the text: redraw what's drawn over it once the page has reflowed.
+    requestAnimationFrame(() => {
+      drawMarks();
+      updateFocus();
+    });
+  }
+
+  function onResize() {
+    drawMarks();
+    updateFocus();
+  }
+
+  // Line focus: everything but the sentence being read is dimmed, with one box whose huge
+  // shadow covers the rest of the window. It follows the sentence as the page scrolls.
+  function updateFocus() {
+    let el = document.getElementById('voice-reader-focus');
+    // Not while the reader has scrolled away to look at something else.
+    const range = settings.lineFocus && ui && state.current && !state.detached ? state.sentenceRange : null;
+    const r = range?.getBoundingClientRect();
+    if (!r || !r.height || r.bottom < 0 || r.top > innerHeight) {
+      el?.remove();
+      return;
+    }
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'voice-reader-focus';
+      document.documentElement.appendChild(el);
+    }
+    const pad = 6;
+    el.style.cssText = 'all:initial;position:fixed;pointer-events:none;z-index:2147483645;border-radius:8px;' +
+      'box-shadow:0 0 0 200vmax rgba(15,18,28,.55);transition:left .15s,top .15s,width .15s,height .15s;' +
+      `left:${r.left - pad}px;top:${r.top - pad}px;width:${r.width + pad * 2}px;height:${r.height + pad * 2}px;`;
   }
 
   function clearHighlights() {
@@ -464,7 +590,9 @@
     wordHL?.clear();
     marked.sentence = [];
     marked.word = [];
+    state.sentenceRange = null;
     drawMarks();
+    updateFocus();
   }
 
   function clearWordHighlight() {
@@ -486,9 +614,13 @@
     marked.word = [];
     drawMarks();
     const r = makeRange(item.model, item.start, item.end);
-    if (!r) return;
+    state.sentenceRange = r;
+    if (!r) return updateFocus();
     sentenceHL.add(r);
+    // Reading has come back into view after scrolling away: follow it again.
+    if (state.detached && inView(r)) setDetached(false);
     scrollIntoViewIfNeeded(item.model.el, r);
+    updateFocus();
   }
 
   function highlightWord(item, start, end) {
@@ -518,26 +650,35 @@
         'pointer-events:none;mix-blend-mode:multiply;';
       document.documentElement.appendChild(layer);
     }
+    const c = HL_COLORS[settings.hlColor] || HL_COLORS.yellow;
     const box = (el, strong) => {
       const img = el.querySelector('img');
       const r = (img && isVisible(img) ? img : el).getBoundingClientRect();
       const b = document.createElement('div');
       b.style.cssText = `position:absolute;left:${r.left + scrollX - 2}px;top:${r.top + scrollY - 1}px;` +
         `width:${r.width + 4}px;height:${r.height + 2}px;border-radius:3px;` +
-        `background:${strong ? '#ffd54f' : 'rgba(255,213,79,.35)'};`;
+        `background:${strong ? c.word : c.sentence};`;
       return b;
     };
+    const showSentence = settings.hlStyle !== 'word';
+    const showWord = settings.hlStyle !== 'sentence';
     layer.replaceChildren(
-      ...marked.sentence.filter((el) => !marked.word.includes(el)).map((el) => box(el, false)),
-      ...marked.word.map((el) => box(el, true)),
+      ...(showSentence ? marked.sentence.filter((el) => !(showWord && marked.word.includes(el))) : []).map((el) => box(el, false)),
+      ...(showWord ? marked.word : []).map((el) => box(el, true)),
     );
   }
 
-  function scrollIntoViewIfNeeded(el, range) {
+  const BAR_SPACE = 110;
+
+  function inView(range) {
     const rect = range.getBoundingClientRect();
-    if (!rect.height) return;
-    const barSpace = 110;
-    if (rect.top >= 40 && rect.bottom <= innerHeight - barSpace) return;
+    return rect.height > 0 && rect.top >= 40 && rect.bottom <= innerHeight - BAR_SPACE;
+  }
+
+  function scrollIntoViewIfNeeded(el, range, force = false) {
+    if (!force && (!settings.follow || state.detached)) return;
+    const rect = range.getBoundingClientRect();
+    if (!rect.height || inView(range)) return;
     if (el.getBoundingClientRect().height < innerHeight * 0.6) {
       el.scrollIntoView({ block: 'center', behavior: 'smooth' });
     } else {
@@ -561,6 +702,7 @@
     if (/context invalidated/i.test(String(err?.message || err))) {
       state.gen++;
       clearTimers();
+      state.playing = false; // or teardown would try to message the extension again, and loop
       teardown();
     }
   }
@@ -603,10 +745,21 @@
     state.watchdog = setTimeout(() => { if (id === state.gen) advance(); }, ms);
   }
 
-  function speakCurrent() {
+  // Speak the current sentence. Reading can start at a word partway through it (a click or a
+  // selection): `from` is that word's offset. Without it, a restart of the same sentence (pause
+  // and play, speed or voice change) keeps the word it started from.
+  function speakCurrent(from = null) {
     clearTimers();
-    const item = state.queue[state.idx];
-    if (!item) return finish();
+    const base = state.queue[state.idx];
+    if (!base) return finish();
+    if (from == null && state.current?.base === base) from = state.current.start;
+    const start = from != null && from > base.start && from < base.end ? from : base.start;
+    // Reading just a selection: the last sentence stops where the selection does.
+    const end = state.limit?.item === base ? Math.max(start + 1, Math.min(base.end, state.limit.end)) : base.end;
+    const item = start === base.start && end === base.end
+      ? base
+      : { ...base, start, end, text: base.text.slice(start - base.start, end - base.start), base };
+    state.current = item;
     const id = ++state.gen;
     state.playing = true;
     state.startedAt = 0;
@@ -629,7 +782,7 @@
 
   function onTtsEvent(id, ev) {
     if (id !== state.gen) return;
-    const item = state.queue[state.idx];
+    const item = state.current;
     if (!item) return;
     switch (ev.type) {
       case 'progress':
@@ -744,6 +897,7 @@
 
   function advance() {
     clearTimers();
+    if (state.limit && state.queue[state.idx] === state.limit.item) return finishSelection();
     state.idx++;
     if (state.idx < state.queue.length) speakCurrent();
     else finish();
@@ -764,6 +918,19 @@
     updateUI();
   }
 
+  // The end of a selection: stop, ready to carry on from just after it.
+  function finishSelection() {
+    state.limit = null;
+    state.gen++;
+    clearTimers();
+    state.playing = false;
+    state.current = null;
+    state.idx = Math.min(state.idx + 1, state.queue.length);
+    clearHighlights();
+    updateUI();
+    setStatus('Finished selection');
+  }
+
   function finish() {
     state.gen++;
     clearTimers();
@@ -777,6 +944,8 @@
   function jump(delta) {
     if (!state.queue.length) return;
     state.idx = Math.max(0, Math.min(state.queue.length - 1, state.idx + delta));
+    if (state.limit && state.idx > state.queue.indexOf(state.limit.item)) state.limit = null;
+    setDetached(false);
     if (state.playing) {
       speakCurrent();
     } else {
@@ -801,6 +970,8 @@
   // ---------- Starting points ----------
 
   function startAt(node, offset, canReload = true) {
+    state.limit = null;
+    setDetached(false);
     let idx = findIndex(node, offset);
     if (idx < 0) {
       // Maybe it's in a section that's unticked in the page map: tick it and read from there.
@@ -819,18 +990,34 @@
       return startAt(node, offset, false);
     }
     if (idx < 0) {
-      // Not part of the detected article (e.g. a sidebar): read just that block.
-      const el = (node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement)?.closest(BLOCK_SEL + ',div');
-      if (!el) return;
-      state.sections = [makeSection('Selected passage', 1, [el], true)];
-      state.queue = [];
-      rebuildQueue();
-      renderMap();
-      idx = Math.max(0, findIndex(node, offset));
+      // Not part of the detected article (e.g. a caption or a sidebar).
+      const block = blockAround(node);
+      if (!block || !addTempSection([block], 'Clicked text')) return;
+      idx = findIndex(node, offset);
+      if (idx < 0) return;
     }
     if (!state.queue.length) return;
     state.idx = idx;
-    speakCurrent();
+    // Start from the beginning of the word at that spot.
+    const base = state.queue[idx];
+    const t = base.model.text;
+    let off = modelOffset(base.model, node, offset);
+    while (off > base.start && /\S/.test(t[off - 1])) off--;
+    speakCurrent(off);
+  }
+
+  // Read from the start of a sentence, ticking its section in the page map if needed.
+  function startAtItem(item) {
+    if (!item) return;
+    state.limit = null;
+    setDetached(false);
+    if (!item.sec.enabled) {
+      item.sec.enabled = true;
+      rebuildQueue();
+      renderMap();
+    }
+    state.idx = state.queue.indexOf(item);
+    speakCurrent(item.start);
   }
 
   async function startReading({ fromSelection }) {
@@ -855,6 +1042,66 @@
     speakCurrent();
   }
 
+  // Read just the selected text, then stop.
+  function readSelection(range) {
+    if (!state.sections.length) loadSections();
+    const nodes = textNodesIn(range);
+    if (!nodes.length) return;
+    const first = nodes[0];
+    const last = nodes[nodes.length - 1];
+    const startOff = first === range.startContainer ? range.startOffset : 0;
+    const endOff = last === range.endContainer ? range.endOffset : last.length;
+    let a = locate(first, startOff);
+    let b = locate(last, endOff, true);
+    if (!a || !b) {
+      // Some of it is outside the article: add those blocks as their own section.
+      const blocks = [...new Set(nodes.map(blockAround).filter(Boolean))]
+        .filter((bl, i, all) => !readableBlockAt(bl) && !all.some((o) => o !== bl && o.contains(bl)));
+      addTempSection(blocks, 'Selected text');
+      a = locate(first, startOff) || a;
+      b = locate(last, endOff, true) || b;
+    }
+    if (!a) return;
+    const all = state.sections.flatMap(sectionItems);
+    // A selection ending right at the end of a sentence lands on the start of the next one.
+    if (b && b.item !== a.item && b.off <= b.item.start) {
+      const prev = all[all.indexOf(b.item) - 1];
+      b = prev ? { item: prev, off: prev.end } : null;
+    }
+    const from = all.indexOf(a.item);
+    const to = b ? all.indexOf(b.item) : from;
+    for (let i = from; i <= to; i++) all[i].sec.enabled = true;
+    rebuildQueue();
+    renderMap();
+    setDetached(false);
+    // Whole words: back to the start of the first, on to the end of the last.
+    const t = a.item.model.text;
+    let start = a.off;
+    while (start > a.item.start && /\S/.test(t[start - 1])) start--;
+    if (b) {
+      const tb = b.item.model.text;
+      let end = b.off;
+      while (end < b.item.end && /[\p{L}\p{N}]/u.test(tb[end])) end++;
+      state.limit = { item: b.item, end };
+    } else {
+      state.limit = null;
+    }
+    state.idx = state.queue.indexOf(a.item);
+    speakCurrent(start);
+  }
+
+  // The text nodes a range covers, in order.
+  function textNodesIn(range) {
+    const root = range.commonAncestorContainer;
+    if (root.nodeType === Node.TEXT_NODE) return root.data.trim() ? [root] : [];
+    const out = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      if (n.data.trim() && range.intersectsNode(n) && isVisible(n.parentElement)) out.push(n);
+    }
+    return out;
+  }
+
   function hasSelection() {
     const sel = getSelection();
     return !!(sel && sel.rangeCount && !sel.isCollapsed && sel.toString().trim());
@@ -870,6 +1117,7 @@
     next: 'M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z',
     close: 'M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z',
     map: 'M3 9h14V7H3v2zm0 4h14v-2H3v2zm0 4h14v-2H3v2zm16 0h2v-2h-2v2zm0-10v2h2V7h-2zm0 6h2v-2h-2v2z',
+    gear: 'M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z',
   };
 
   function icon(name) {
@@ -933,6 +1181,19 @@
       font-weight: 400; font-size: 13px; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .row button.title:disabled { cursor: default; }
     .count { opacity: .55; font-variant-numeric: tabular-nums; font-size: 12px; flex: none; }
+    .group { padding: 10px 14px 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; opacity: .55; }
+    .opt { display: flex; gap: 10px; align-items: flex-start; padding: 7px 14px; cursor: pointer; }
+    .opt:hover { background: rgba(255,255,255,.05); }
+    .opt input { margin: 2px 0 0; accent-color: #4f8cff; cursor: pointer; flex: none; }
+    .opt small { display: block; opacity: .6; font-size: 12px; margin-top: 2px; line-height: 1.35; }
+    .swatches { display: flex; align-items: center; gap: 10px; padding: 6px 14px 12px; }
+    button.swatch { width: 22px; height: 22px; border-radius: 50%; box-shadow: inset 0 0 0 2px rgba(0,0,0,.15); }
+    button.swatch.on { outline: 2px solid #fff; outline-offset: 2px; }
+    .swatches select { margin-left: auto; }
+    button.back { width: auto; height: 28px; padding: 0 12px; border-radius: 999px; background: #ffd54f; color: #111;
+      font-size: 12px; font-weight: 600; white-space: nowrap; }
+    button.back:hover { background: #ffe082; }
+    button.back[hidden] { display: none; }
   `;
 
   function buildUI() {
@@ -951,7 +1212,16 @@
     const faster = h('button', { className: 'small', title: 'Faster (Alt+Shift+Up)', type: 'button' }, '+');
     faster.addEventListener('click', () => setRate(settings.rate + RATE_STEP));
 
-    const mapBtn = button('', 'Page map (Alt+Shift+M)', 'map', () => toggleMap());
+    const mapBtn = button('', 'Page map', 'map', () => toggleMap());
+    const optsBtn = button('', 'Options', 'gear', () => toggleOptions());
+    const opts = buildOptions();
+    const backBtn = h('button', { className: 'back', type: 'button', hidden: true, textContent: 'Back to reading',
+      title: 'Scroll back to the sentence being read, and follow it again' });
+    backBtn.addEventListener('click', () => {
+      setDetached(false);
+      const item = state.current;
+      if (item && state.sentenceRange) scrollIntoViewIfNeeded(item.model.el, state.sentenceRange, true);
+    });
     const mapList = h('div', { className: 'map-list' });
     const mapPanel = h('div', { className: 'map', hidden: true },
       h('div', { className: 'map-head' }, 'Page map',
@@ -968,16 +1238,114 @@
       h('span', { className: 'sep' }),
       voiceSelect,
       status,
+      backBtn,
       mapBtn,
-      button('', 'Close (Alt+Shift+X)', 'close', teardown),
+      optsBtn,
+      button('', 'Close', 'close', teardown),
     );
-    shadow.append(h('style', { textContent: BAR_CSS }), h('div', { className: 'wrap' }, mapPanel, bar));
+    shadow.append(h('style', { textContent: BAR_CSS }), h('div', { className: 'wrap' }, mapPanel, opts.panel, bar));
     document.documentElement.appendChild(host);
 
-    ui = { host, playBtn, rateLabel, status, voiceSelect, mapBtn, mapPanel, mapList, mapRows: new Map(), statusText: '' };
+    ui = { host, playBtn, rateLabel, status, voiceSelect, mapBtn, optsBtn, backBtn, opts, mapPanel, mapList, mapRows: new Map(), statusText: '' };
     window.addEventListener('keydown', onKeyDown, true);
     window.addEventListener('click', onAltClick, true);
+    window.addEventListener('click', onPageClick, true);
+    buildPointerButtons();
     installHighlights();
+  }
+
+  // ---------- Options panel ----------
+
+  const SWITCHES = [
+    ['Start reading', [
+      ['clickToRead', 'Click to read', 'Click any text to read from that word. The dotted underline shows where it will start.'],
+      ['selectionButton', 'Play button on selected text', 'Select text, then press the play button to hear just that part.'],
+      ['paragraphButtons', 'Play buttons beside paragraphs', 'Rest the pointer on a paragraph to get a play button in the margin.'],
+    ]],
+    ['While reading', [
+      ['follow', 'Follow along', 'Scroll with the reading. Scrolling by hand pauses this until you press "Back to reading".'],
+      ['lineFocus', 'Line focus', 'Dim the page except the sentence being read.'],
+      ['wideSpacing', 'Wider text spacing', 'More space between letters, words and lines. Can make text easier to read.'],
+    ]],
+  ];
+
+  function buildOptions() {
+    const inputs = {};
+    const body = h('div', { className: 'map-list opts-list' });
+    for (const [group, rows] of SWITCHES) {
+      body.append(h('div', { className: 'group', textContent: group }));
+      for (const [key, label, help] of rows) {
+        const input = h('input', { type: 'checkbox' });
+        input.addEventListener('change', () => setOption(key, input.checked));
+        inputs[key] = input;
+        body.append(h('label', { className: 'opt' }, input, h('span', {}, label, h('small', { textContent: help }))));
+      }
+    }
+    body.append(h('div', { className: 'group', textContent: 'Highlight' }));
+    const swatches = {};
+    const swatchRow = h('div', { className: 'swatches' });
+    for (const [key, c] of Object.entries(HL_COLORS)) {
+      const b = h('button', { className: 'swatch', type: 'button', title: c.name });
+      b.setAttribute('aria-label', `${c.name} highlight`);
+      b.style.background = c.word;
+      b.addEventListener('click', () => setOption('hlColor', key));
+      swatches[key] = b;
+      swatchRow.append(b);
+    }
+    const styleSelect = h('select', { title: 'What to highlight' },
+      h('option', { value: 'both', textContent: 'Sentence and word' }),
+      h('option', { value: 'sentence', textContent: 'Sentence only' }),
+      h('option', { value: 'word', textContent: 'Word only' }));
+    styleSelect.addEventListener('change', () => setOption('hlStyle', styleSelect.value));
+    swatchRow.append(styleSelect);
+    body.append(swatchRow);
+    const panel = h('div', { className: 'map opts', hidden: true },
+      h('div', { className: 'map-head' }, 'Options', h('small', { textContent: 'Ways to start reading, and how reading looks.' })),
+      body);
+    return { panel, inputs, swatches, styleSelect };
+  }
+
+  function updateOptionsUI() {
+    if (!ui) return;
+    for (const [key, input] of Object.entries(ui.opts.inputs)) input.checked = !!settings[key];
+    for (const [key, b] of Object.entries(ui.opts.swatches)) {
+      b.classList.toggle('on', key === settings.hlColor);
+      b.setAttribute('aria-pressed', String(key === settings.hlColor));
+    }
+    ui.opts.styleSelect.value = settings.hlStyle;
+  }
+
+  function setOption(key, value) {
+    settings[key] = value;
+    chrome.storage.sync.set({ [key]: value }).catch(() => {});
+    if (key === 'hlColor' || key === 'hlStyle' || key === 'wideSpacing' || key === 'lineFocus') applyDisplaySettings();
+    if (key === 'hlColor') colorSelectionButton();
+    if (key === 'clickToRead' && !value) hoverHL?.clear();
+    if (key === 'selectionButton' && !value) hideSelectionButton();
+    if (key === 'paragraphButtons' && !value) hideParagraphButton();
+    if (key === 'follow' && value) setDetached(false);
+    updateOptionsUI();
+  }
+
+  function toggleOptions(open) {
+    if (!ui) return;
+    open ??= ui.opts.panel.hidden;
+    if (open) toggleMap(false);
+    ui.opts.panel.hidden = !open;
+    ui.optsBtn.classList.toggle('on', open);
+    ui.optsBtn.setAttribute('aria-pressed', String(open));
+  }
+
+  // Scrolling by hand stops the page following the reading, until "Back to reading".
+  function setDetached(detached) {
+    if (state.detached === detached) return;
+    state.detached = detached;
+    if (ui) ui.backBtn.hidden = !detached;
+    updateFocus();
+  }
+
+  function onUserScroll() {
+    if (ui && state.playing && settings.follow && !state.detached) setDetached(true);
   }
 
   function populateVoices() {
@@ -1006,6 +1374,7 @@
   function toggleMap(open) {
     if (!ui) return;
     open ??= ui.mapPanel.hidden;
+    if (open) toggleOptions(false);
     ui.mapPanel.hidden = !open;
     ui.mapBtn.classList.toggle('on', open);
     ui.mapBtn.setAttribute('aria-pressed', String(open));
@@ -1069,7 +1438,7 @@
     if (!ui) buildUI();
     if (!state.voices) {
       try {
-        Object.assign(settings, await chrome.storage.sync.get({ rate: 1, voiceName: null }));
+        Object.assign(settings, await chrome.storage.sync.get(DEFAULT_SETTINGS));
       } catch {
         // Fall back to defaults.
       }
@@ -1077,6 +1446,9 @@
       state.voices = Array.isArray(voices) ? voices : [];
       populateVoices();
     }
+    applyDisplaySettings();
+    colorSelectionButton();
+    updateOptionsUI();
     updateUI();
   }
 
@@ -1088,24 +1460,33 @@
     state.sections = [];
     state.queue = [];
     state.idx = 0;
+    state.current = null;
+    state.limit = null;
     removeHighlights();
     window.removeEventListener('keydown', onKeyDown, true);
     window.removeEventListener('click', onAltClick, true);
+    window.removeEventListener('click', onPageClick, true);
+    removePointerButtons();
     ui?.host.remove();
     ui = null;
   }
 
   // ---------- Input ----------
 
+  const SCROLL_KEYS = new Set(['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown', ' ']);
+
   function onKeyDown(e) {
+    if (e.key === 'Escape') {
+      hideSelectionButton();
+      hideParagraphButton();
+    }
+    if (!e.altKey && !e.ctrlKey && !e.metaKey && SCROLL_KEYS.has(e.key) && !e.target.closest?.(INTERACTIVE_SEL)) onUserScroll();
     if (!e.altKey || !e.shiftKey || e.ctrlKey || e.metaKey) return;
     const actions = {
       ArrowRight: () => jump(1),
       ArrowLeft: () => jump(-1),
       ArrowUp: () => setRate(settings.rate + RATE_STEP),
       ArrowDown: () => setRate(settings.rate - RATE_STEP),
-      KeyM: () => toggleMap(),
-      KeyX: teardown,
     };
     const action = actions[e.code];
     if (!action) return;
@@ -1123,6 +1504,314 @@
     e.preventDefault(); // also stops Chrome's Alt+click "download link"
     e.stopPropagation();
     startAt(pos.startContainer, pos.startOffset);
+  }
+
+  // ---------- Starting from where you point (like Speechify and NaturalReader) ----------
+  // Each can be switched off in Options:
+  // - Click to read: click any text to read from that word. Hovering underlines where it would start.
+  // - Selecting text shows a play button that reads just the selection.
+  // - Resting the pointer on a paragraph shows a play button in its margin.
+  // Timings follow NN/g's guidance for things shown on hover: wait before showing and keep them
+  // a moment after the pointer leaves, so nothing flickers as the pointer passes over the page.
+
+  // Clicks on these keep their normal job.
+  const INTERACTIVE_SEL = 'a,button,input,textarea,select,option,label,summary,video,audio,iframe,' +
+    '[role="button"],[role="link"],[role="tab"],[role="menuitem"],[role="checkbox"],[contenteditable=""],[contenteditable="true"]';
+  const SHOW_DELAY = 400;        // pointer resting on a paragraph before its button shows
+  const HIDE_DELAY = 500;        // button stays this long after the pointer leaves
+  const DOUBLE_CLICK_WAIT = 300; // a second click within this is a double-click (selecting a word)
+  const MIN_SELECTION = 3;       // characters, so a stray click-drag doesn't bring up a button
+
+  let pointer = null; // the play buttons and their timers
+  let clickTimer = null;
+
+  // The text position under the pointer, or null if the pointer isn't over a character.
+  function textAt(x, y) {
+    const pos = document.caretRangeFromPoint?.(x, y);
+    const node = pos?.startContainer;
+    if (!node || node.nodeType !== Node.TEXT_NODE || !node.data.trim()) return null;
+    // caretRangeFromPoint finds the nearest text even from empty space, so check a character is there.
+    const r = document.createRange();
+    for (const i of [pos.startOffset - 1, pos.startOffset]) {
+      if (i < 0 || i >= node.length) continue;
+      r.setStart(node, i);
+      r.setEnd(node, i + 1);
+      for (const rect of r.getClientRects()) {
+        if (x >= rect.left - 2 && x <= rect.right + 2 && y >= rect.top - 2 && y <= rect.bottom + 2) {
+          return { node, offset: pos.startOffset };
+        }
+      }
+    }
+    return null;
+  }
+
+  function overOurUI(e) {
+    return e.composedPath().some((n) => n === ui?.host || n === pointer?.host);
+  }
+
+  function onPageClick(e) {
+    if (!ui || e.button !== 0 || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    clearTimeout(clickTimer);
+    // Double and triple clicks select a word or line: leave those alone.
+    if (!settings.clickToRead || e.detail > 1 || overOurUI(e)) return;
+    if (e.target.closest?.(INTERACTIVE_SEL) || hasSelection()) return;
+    const at = textAt(e.clientX, e.clientY);
+    if (!at) return;
+    // Wait a moment, in case this is the first click of a double-click.
+    clickTimer = setTimeout(() => {
+      if (!ui || hasSelection()) return;
+      hoverHL?.clear();
+      startAt(at.node, at.offset);
+    }, DOUBLE_CLICK_WAIT);
+  }
+
+  // Click to read: underline from the word under the pointer to the end of its sentence, so it's
+  // clear what a click would read.
+  function updateHoverPreview(ev) {
+    if (!hoverHL) return;
+    hoverHL.clear();
+    if (!settings.clickToRead || ev.buttons || hasSelection() || ev.target.closest?.(INTERACTIVE_SEL)) return;
+    const at = textAt(ev.clientX, ev.clientY);
+    if (!at) return;
+    const loc = locate(at.node, at.offset);
+    if (loc) {
+      const t = loc.item.model.text;
+      let start = loc.off;
+      while (start > loc.item.start && /\S/.test(t[start - 1])) start--;
+      const r = makeRange(loc.item.model, start, loc.item.end);
+      if (r) hoverHL.add(r);
+    } else {
+      // Outside the article: underline from the word to the end of this piece of text.
+      const d = at.node.data;
+      let start = at.offset;
+      while (start > 0 && /\S/.test(d[start - 1])) start--;
+      const r = document.createRange();
+      r.setStart(at.node, start);
+      r.setEnd(at.node, d.length);
+      hoverHL.add(r);
+    }
+  }
+
+  const POINTER_CSS = `
+    button { all: unset; position: fixed; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%;
+      background: #4f8cff; color: #fff; box-shadow: 0 2px 10px rgba(0,0,0,.3); cursor: pointer; }
+    button:hover { background: #3f7cf0; }
+    button:focus-visible { outline: 2px solid #8ab4ff; outline-offset: 2px; }
+    button[hidden] { display: none; }
+    button.sel { color: #111; }
+    button.sel:hover { filter: brightness(.93); }
+    button.para { width: 24px; height: 24px; opacity: .85; }
+    button.para:hover { opacity: 1; }
+    svg { width: 18px; height: 18px; fill: currentColor; }
+  `;
+
+  function buildPointerButtons() {
+    const host = h('div', { id: 'voice-reader-pointer' });
+    host.style.cssText = 'all:initial;position:fixed;left:0;top:0;width:0;height:0;z-index:2147483647;';
+    const shadow = host.attachShadow({ mode: 'open' });
+    const make = (cls, title, onClick) => {
+      const b = button(cls, title, 'play', onClick);
+      b.hidden = true;
+      b.addEventListener('mousedown', (e) => e.preventDefault()); // keep the selection
+      return b;
+    };
+    const selBtn = make('sel', 'Read the selected text', () => {
+      const r = pointer.selRange;
+      hideSelectionButton();
+      getSelection()?.removeAllRanges();
+      if (r) readSelection(r);
+    });
+    const paraBtn = make('para', 'Read from this paragraph', () => {
+      const block = pointer.paraBlock;
+      hideParagraphButton();
+      if (block) startAtItem(state.sections.flatMap(sectionItems).find((it) => it.model.el === block));
+    });
+    shadow.append(h('style', { textContent: POINTER_CSS }), selBtn, paraBtn);
+    document.documentElement.appendChild(host);
+    pointer = {
+      host, selBtn, paraBtn, selRange: null,
+      paraBlock: null, pendingBlock: null, showTimer: null, hideTimer: null,
+      moveQueued: false, lastMove: null,
+    };
+    colorSelectionButton();
+    document.addEventListener('selectionchange', onSelectionChange);
+    document.addEventListener('mouseup', onMouseUp, true);
+    document.addEventListener('keyup', onKeyUp, true);
+    document.addEventListener('mousemove', onMouseMove, { passive: true });
+    document.addEventListener('mouseout', onMouseOut, true);
+    document.addEventListener('mousedown', onMouseDown, true);
+    window.addEventListener('scroll', onScroll, { passive: true, capture: true });
+    window.addEventListener('wheel', onUserScroll, { passive: true });
+    window.addEventListener('touchmove', onUserScroll, { passive: true });
+  }
+
+  function removePointerButtons() {
+    clearTimeout(clickTimer);
+    if (!pointer) return;
+    clearTimeout(pointer.showTimer);
+    clearTimeout(pointer.hideTimer);
+    document.removeEventListener('selectionchange', onSelectionChange);
+    document.removeEventListener('mouseup', onMouseUp, true);
+    document.removeEventListener('keyup', onKeyUp, true);
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseout', onMouseOut, true);
+    document.removeEventListener('mousedown', onMouseDown, true);
+    window.removeEventListener('scroll', onScroll, { capture: true });
+    window.removeEventListener('wheel', onUserScroll);
+    window.removeEventListener('touchmove', onUserScroll);
+    pointer.host.remove();
+    pointer = null;
+  }
+
+  // Put a button at a spot, kept inside the window.
+  function place(btn, left, top) {
+    const size = btn.offsetWidth || 30;
+    btn.style.left = Math.max(4, Math.min(innerWidth - size - 4, left)) + 'px';
+    btn.style.top = Math.max(4, Math.min(innerHeight - size - 4, top)) + 'px';
+  }
+
+  // ----- Selection button: shown once the selection is finished, not while dragging -----
+
+  function onSelectionChange() {
+    const sel = getSelection();
+    if (!sel || sel.isCollapsed) hideSelectionButton();
+  }
+
+  function onMouseUp(e) {
+    if (pointer && !overOurUI(e)) setTimeout(updateSelectionButton, 10);
+  }
+
+  function onKeyUp(e) {
+    if (e.shiftKey || e.key === 'Shift') updateSelectionButton(); // selecting with Shift+arrows
+  }
+
+  function updateSelectionButton() {
+    if (!pointer) return;
+    if (!settings.selectionButton) return hideSelectionButton();
+    const sel = getSelection();
+    const text = sel && sel.rangeCount && !sel.isCollapsed ? sel.toString() : '';
+    if (text.replace(/\s+/g, '').length < MIN_SELECTION) return hideSelectionButton();
+    const range = sel.getRangeAt(0);
+    const common = range.commonAncestorContainer;
+    const el = common.nodeType === Node.ELEMENT_NODE ? common : common.parentElement;
+    if (!el || el.closest('input,textarea,[contenteditable=""],[contenteditable="true"]')) return hideSelectionButton();
+    const rects = range.getClientRects();
+    const last = rects[rects.length - 1];
+    if (!last) return hideSelectionButton();
+    pointer.selRange = range.cloneRange();
+    pointer.selBtn.hidden = false;
+    place(pointer.selBtn, last.right + 6, last.top + last.height / 2 - 15);
+  }
+
+  // The selection's play button matches the highlight color, so it reads as "play what I
+  // highlighted". The other play buttons keep the bar's blue.
+  function colorSelectionButton() {
+    if (pointer) pointer.selBtn.style.background = (HL_COLORS[settings.hlColor] || HL_COLORS.yellow).word;
+  }
+
+  function hideSelectionButton() {
+    if (!pointer) return;
+    pointer.selBtn.hidden = true;
+    pointer.selRange = null;
+  }
+
+  // ----- Paragraph button: shown after the pointer rests on a paragraph -----
+
+  // The article block under the pointer, if it's one the reader knows about.
+  let blockCache = { sections: null, blocks: null };
+  function readableBlockAt(target) {
+    if (blockCache.sections !== state.sections) {
+      blockCache = { sections: state.sections, blocks: new Set(state.sections.flatMap((s) => s.blocks)) };
+    }
+    const blocks = blockCache.blocks;
+    for (let el = target, d = 0; el && el !== document.body && d < 8; el = el.parentElement, d++) {
+      if (blocks.has(el)) return el;
+    }
+    return null;
+  }
+
+  function onMouseMove(e) {
+    if (!pointer || !ui) return;
+    pointer.lastMove = e;
+    if (pointer.moveQueued) return;
+    pointer.moveQueued = true;
+    requestAnimationFrame(() => {
+      if (!pointer) return;
+      pointer.moveQueued = false;
+      const ev = pointer.lastMove;
+      if (overOurUI(ev)) {
+        hoverHL?.clear();
+        if (ev.composedPath().includes(pointer.paraBtn)) cancelParagraphHide();
+        return;
+      }
+      updateHoverPreview(ev);
+      updateParagraphButton(ev);
+    });
+  }
+
+  function updateParagraphButton(ev) {
+    if (!settings.paragraphButtons) return;
+    const block = ev.target.nodeType === Node.ELEMENT_NODE ? readableBlockAt(ev.target) : null;
+    // No button beside the paragraph that's already being read.
+    const reading = state.playing ? state.current?.model.el : null;
+    const target = block && block !== reading ? block : null;
+    if (target && target === pointer.paraBlock) {
+      cancelParagraphHide();
+      return;
+    }
+    if (target !== pointer.pendingBlock) {
+      clearTimeout(pointer.showTimer);
+      pointer.pendingBlock = target;
+      if (target) pointer.showTimer = setTimeout(() => showParagraphButton(target), SHOW_DELAY);
+    }
+    // Left the paragraph: hide in a moment. Moving around doesn't restart the countdown.
+    if (pointer.paraBlock && !pointer.hideTimer) pointer.hideTimer = setTimeout(hideParagraphButton, HIDE_DELAY);
+  }
+
+  function cancelParagraphHide() {
+    clearTimeout(pointer.hideTimer);
+    pointer.hideTimer = null;
+  }
+
+  function showParagraphButton(block) {
+    if (!pointer || !settings.paragraphButtons) return;
+    cancelParagraphHide();
+    pointer.pendingBlock = null;
+    pointer.paraBlock = block;
+    const rect = block.getBoundingClientRect();
+    pointer.paraBtn.hidden = false;
+    place(pointer.paraBtn, rect.left - 32, rect.top);
+  }
+
+  function hideParagraphButton() {
+    if (!pointer) return;
+    clearTimeout(pointer.showTimer);
+    cancelParagraphHide();
+    pointer.paraBtn.hidden = true;
+    pointer.paraBlock = null;
+    pointer.pendingBlock = null;
+  }
+
+  function onMouseOut(e) {
+    if (!pointer || e.relatedTarget) return;
+    // The pointer left the window.
+    hoverHL?.clear();
+    clearTimeout(pointer.showTimer);
+    pointer.pendingBlock = null;
+  }
+
+  function onMouseDown(e) {
+    // Dragging the page's scrollbar counts as scrolling by hand.
+    const doc = document.documentElement;
+    if (e.clientX >= doc.clientWidth || e.clientY >= doc.clientHeight) onUserScroll();
+  }
+
+  function onScroll() {
+    if (!pointer) return;
+    hideParagraphButton();
+    hoverHL?.clear();
+    if (!pointer.selBtn.hidden) updateSelectionButton();
+    if (settings.lineFocus) requestAnimationFrame(updateFocus);
   }
 
   window.addEventListener('pagehide', () => {
@@ -1143,6 +1832,14 @@
       case 'readSelection':
         startReading({ fromSelection: true });
         break;
+      case 'readSelectionOnly': {
+        const sel = getSelection();
+        if (!sel?.rangeCount || sel.isCollapsed) break;
+        const range = sel.getRangeAt(0).cloneRange();
+        sel.removeAllRanges();
+        ensureReady().then(() => readSelection(range));
+        break;
+      }
       case 'ttsEvent':
         onTtsEvent(msg.id, msg.ev);
         break;
