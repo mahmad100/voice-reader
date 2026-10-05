@@ -35,7 +35,7 @@
 
   // ---------- State ----------
 
-  const settings = { rate: 1, voiceName: null, mapOpen: false };
+  const settings = { rate: 1, voiceName: null };
   const state = {
     sections: [],     // [{ title, level, blocks, enabled, items }] for the page map
     queue: [],        // [{ model, start, end, text, sec }] from the ticked sections
@@ -1006,8 +1006,6 @@
   function toggleMap(open) {
     if (!ui) return;
     open ??= ui.mapPanel.hidden;
-    settings.mapOpen = open;
-    chrome.storage.sync.set({ mapOpen: open }).catch(() => {});
     ui.mapPanel.hidden = !open;
     ui.mapBtn.classList.toggle('on', open);
     ui.mapBtn.setAttribute('aria-pressed', String(open));
@@ -1071,11 +1069,10 @@
     if (!ui) buildUI();
     if (!state.voices) {
       try {
-        Object.assign(settings, await chrome.storage.sync.get({ rate: 1, voiceName: null, mapOpen: false }));
+        Object.assign(settings, await chrome.storage.sync.get({ rate: 1, voiceName: null }));
       } catch {
         // Fall back to defaults.
       }
-      if (settings.mapOpen) toggleMap(true);
       const voices = await send({ type: 'getVoices' });
       state.voices = Array.isArray(voices) ? voices : [];
       populateVoices();

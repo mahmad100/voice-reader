@@ -26,7 +26,7 @@ After changing any file, click the reload arrow on the extension's card in `chro
 | Slower / faster | **Alt+Shift+↓** / **Alt+Shift+↑**, or **−** / **+** on the bar |
 | Close the player | **Alt+Shift+X**, or **×** on the bar |
 
-Your speed, voice, and whether the page map is open are remembered. To change the start/pause shortcut, go to `chrome://extensions/shortcuts`.
+Your speed and voice are remembered. The page map starts closed. To change the start/pause shortcut, go to `chrome://extensions/shortcuts`.
 
 ## Page map
 
