@@ -32,9 +32,10 @@
 
   // ---------- State ----------
 
-  const settings = { rate: 1, voiceName: null };
+  const settings = { rate: 1, voiceName: null, mapOpen: false };
   const state = {
-    queue: [],        // [{ model, start, end, text }]
+    sections: [],     // [{ title, level, blocks, enabled, items }] for the page map
+    queue: [],        // [{ model, start, end, text, sec }] from the ticked sections
     idx: 0,
     playing: false,
     gen: 0,           // bumped on every speak/stop so stale engine events are ignored
@@ -113,6 +114,8 @@
     return best.closest('article, main, [role="main"]') || best;
   }
 
+  // All readable blocks in page order, plus the index of the heading where the article proper
+  // ends ("References", "External links", ...), or -1 if there isn't one.
   function collectBlocks() {
     const root = findContentRoot();
     const isBody = root === document.body;
@@ -133,7 +136,7 @@
       if (title) blocks.unshift(title);
     }
     const end = blocks.findIndex((el, i) => i > 2 && /^H\d$/.test(el.tagName) && END_HEADING.test(el.textContent.trim()));
-    return end > 0 ? blocks.slice(0, end) : blocks;
+    return { blocks, end };
   }
 
   // ---------- Text model: block text plus a map back to DOM text nodes ----------
@@ -235,7 +238,10 @@
 
   // Index of the sentence containing a DOM position, or -1 if it isn't in the queue.
   function findIndex(node, offset) {
-    const q = state.queue;
+    return findIn(state.queue, node, offset);
+  }
+
+  function findIn(q, node, offset) {
     for (let i = 0; i < q.length; i++) {
       const model = q[i].model;
       if (!model.el.contains(node)) continue;
@@ -247,6 +253,90 @@
       return i;
     }
     return -1;
+  }
+
+  // ---------- Page map: the article split into sections at its headings ----------
+
+  function makeSection(title, level, blocks, enabled) {
+    return { title, level, blocks, enabled, items: null };
+  }
+
+  function buildSections() {
+    const { blocks, end } = collectBlocks();
+    const sections = [];
+    let sec = null;
+    blocks.forEach((el, i) => {
+      const heading = /^H(\d)$/.exec(el.tagName);
+      if (heading || !sec) {
+        const title = heading ? buildModel(el).text.replace(/\s+/g, ' ').trim() : '';
+        // Everything from "References" on starts unticked, as reading used to stop there.
+        sec = makeSection(title || (heading ? 'Untitled section' : 'Introduction'),
+          heading ? +heading[1] : 1, [], end < 0 || i < end);
+        sections.push(sec);
+      }
+      sec.blocks.push(el);
+    });
+    return sections;
+  }
+
+  // A section's sentences, split on first use and then kept, so the same objects stay in the
+  // queue when sections are ticked or unticked.
+  function sectionItems(sec) {
+    if (!sec.items) {
+      sec.items = buildQueue(sec.blocks);
+      for (const item of sec.items) item.sec = sec;
+    }
+    return sec.items;
+  }
+
+  function loadSections() {
+    state.sections = buildSections();
+    state.queue = [];
+    state.idx = 0;
+    rebuildQueue();
+    renderMap();
+  }
+
+  // Rebuild the queue from the ticked sections, staying on the current sentence if it's still
+  // in. Returns true if the current sentence was dropped and reading moved on.
+  function rebuildQueue() {
+    const current = state.queue[state.idx];
+    state.queue = state.sections.filter((s) => s.enabled).flatMap(sectionItems);
+    if (!current) {
+      state.idx = Math.min(state.idx, state.queue.length);
+      return false;
+    }
+    const i = state.queue.indexOf(current);
+    if (i >= 0) {
+      state.idx = i;
+      return false;
+    }
+    // Carry on from the next ticked sentence after it.
+    const all = state.sections.flatMap(sectionItems);
+    const next = all.slice(all.indexOf(current) + 1).find((it) => it.sec.enabled);
+    state.idx = next ? state.queue.indexOf(next) : state.queue.length;
+    return true;
+  }
+
+  function setSectionEnabled(sec, enabled) {
+    sec.enabled = enabled;
+    if (rebuildQueue()) {
+      if (state.playing) speakCurrent();
+      else if (state.queue[state.idx]) highlightSentence(state.queue[state.idx]);
+      else sentenceHL?.clear();
+    }
+    renderMap();
+    updateUI();
+  }
+
+  function jumpToSection(sec) {
+    const first = sectionItems(sec)[0];
+    if (!first) return;
+    sec.enabled = true;
+    rebuildQueue();
+    state.idx = state.queue.indexOf(first);
+    renderMap();
+    speakCurrent();
   }
 
   // ---------- Highlighting (CSS Custom Highlight API: no changes to the page's DOM) ----------
@@ -584,13 +674,32 @@
 
   // ---------- Starting points ----------
 
-  function startAt(node, offset) {
+  function startAt(node, offset, canReload = true) {
     let idx = findIndex(node, offset);
+    if (idx < 0) {
+      // Maybe it's in a section that's unticked in the page map: tick it and read from there.
+      const all = state.sections.flatMap(sectionItems);
+      const i = findIn(all, node, offset);
+      if (i >= 0) {
+        all[i].sec.enabled = true;
+        rebuildQueue();
+        renderMap();
+        idx = state.queue.indexOf(all[i]);
+      }
+    }
+    if (idx < 0 && canReload) {
+      // The page may have changed since it was mapped.
+      loadSections();
+      return startAt(node, offset, false);
+    }
     if (idx < 0) {
       // Not part of the detected article (e.g. a sidebar): read just that block.
       const el = (node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement)?.closest(BLOCK_SEL + ',div');
       if (!el) return;
-      state.queue = buildQueue([el]);
+      state.sections = [makeSection('Selected passage', 1, [el], true)];
+      state.queue = [];
+      rebuildQueue();
+      renderMap();
       idx = Math.max(0, findIndex(node, offset));
     }
     if (!state.queue.length) return;
@@ -609,8 +718,8 @@
       offset = r.startOffset;
       sel.removeAllRanges();
     }
-    state.queue = buildQueue(collectBlocks());
-    if (node) return startAt(node, offset);
+    loadSections();
+    if (node) return startAt(node, offset, false);
     if (!state.queue.length) {
       updateUI();
       setStatus('No readable text found');
@@ -634,6 +743,7 @@
     prev: 'M6 6h2v12H6zm3.5 6 8.5 6V6z',
     next: 'M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z',
     close: 'M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z',
+    map: 'M3 9h14V7H3v2zm0 4h14v-2H3v2zm0 4h14v-2H3v2zm16 0h2v-2h-2v2zm0-10v2h2V7h-2zm0 6h2v-2h-2v2z',
   };
 
   function icon(name) {
@@ -678,6 +788,25 @@
     option, optgroup { background: #2b3142; color: #f2f4f8; }
     .status { min-width: 64px; opacity: .75; font-variant-numeric: tabular-nums; padding: 0 6px; white-space: nowrap; text-align: center; }
     .sep { width: 1px; height: 22px; background: rgba(255,255,255,.15); margin: 0 4px; }
+    button.on { background: rgba(138,180,255,.22); color: #cfe0ff; }
+    .wrap { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+    .map { width: 380px; max-width: calc(100vw - 32px); max-height: min(50vh, 440px); display: flex; flex-direction: column;
+      background: #1f2330; color: #f2f4f8; border-radius: 14px; box-shadow: 0 8px 28px rgba(0,0,0,.35);
+      font: 13px/1.3 system-ui, -apple-system, "Segoe UI", sans-serif; user-select: none; overflow: hidden; }
+    .map[hidden] { display: none; }
+    .map-head { padding: 10px 14px 8px; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,.1); }
+    .map-head small { display: block; font-weight: 400; opacity: .6; margin-top: 2px; }
+    .map-list { position: relative; overflow-y: auto; padding: 4px 0; scrollbar-width: thin; }
+    .row { display: flex; align-items: center; gap: 6px; padding: 0 10px 0 calc(10px + var(--indent, 0) * 16px);
+      border-left: 3px solid transparent; }
+    .row.off .title, .row.off .count { opacity: .45; }
+    .row.current { border-left-color: #ffd54f; background: rgba(255,213,79,.08); }
+    .row.current .title { font-weight: 600; }
+    .row input { margin: 0; accent-color: #4f8cff; cursor: pointer; flex: none; }
+    .row button.title { display: block; width: auto; height: auto; flex: 1; min-width: 0; padding: 6px; border-radius: 6px;
+      font-weight: 400; font-size: 13px; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .row button.title:disabled { cursor: default; }
+    .count { opacity: .55; font-variant-numeric: tabular-nums; font-size: 12px; flex: none; }
   `;
 
   function buildUI() {
@@ -696,6 +825,14 @@
     const faster = h('button', { className: 'small', title: 'Faster (Alt+Shift+Up)', type: 'button' }, '+');
     faster.addEventListener('click', () => setRate(settings.rate + RATE_STEP));
 
+    const mapBtn = button('', 'Page map (Alt+Shift+M)', 'map', () => toggleMap());
+    const mapList = h('div', { className: 'map-list' });
+    const mapPanel = h('div', { className: 'map', hidden: true },
+      h('div', { className: 'map-head' }, 'Page map',
+        h('small', { textContent: 'Tick the sections to read. Click a title to jump there.' })),
+      mapList,
+    );
+
     const bar = h('div', { className: 'bar' },
       button('', 'Previous sentence (Alt+Shift+Left)', 'prev', () => jump(-1)),
       playBtn,
@@ -705,12 +842,13 @@
       h('span', { className: 'sep' }),
       voiceSelect,
       status,
+      mapBtn,
       button('', 'Close (Alt+Shift+X)', 'close', teardown),
     );
-    shadow.append(h('style', { textContent: BAR_CSS }), bar);
+    shadow.append(h('style', { textContent: BAR_CSS }), h('div', { className: 'wrap' }, mapPanel, bar));
     document.documentElement.appendChild(host);
 
-    ui = { host, playBtn, rateLabel, status, voiceSelect, statusText: '' };
+    ui = { host, playBtn, rateLabel, status, voiceSelect, mapBtn, mapPanel, mapList, mapRows: new Map(), statusText: '' };
     window.addEventListener('keydown', onKeyDown, true);
     window.addEventListener('click', onAltClick, true);
     installHighlights();
@@ -739,6 +877,55 @@
     if (current) sel.value = current.voiceName;
   }
 
+  function toggleMap(open) {
+    if (!ui) return;
+    open ??= ui.mapPanel.hidden;
+    settings.mapOpen = open;
+    chrome.storage.sync.set({ mapOpen: open }).catch(() => {});
+    ui.mapPanel.hidden = !open;
+    ui.mapBtn.classList.toggle('on', open);
+    ui.mapBtn.setAttribute('aria-pressed', String(open));
+    if (open) updateMapCurrent(true);
+  }
+
+  function renderMap() {
+    if (!ui) return;
+    ui.mapRows.clear();
+    const minLevel = Math.min(...state.sections.map((s) => s.level));
+    const rows = state.sections.map((sec) => {
+      const count = sectionItems(sec).length;
+      const check = h('input', { type: 'checkbox', checked: sec.enabled, title: sec.enabled ? 'Skip this section' : 'Read this section' });
+      check.addEventListener('change', () => setSectionEnabled(sec, check.checked));
+      const title = h('button', { className: 'title', type: 'button', textContent: sec.title, title: sec.title, disabled: !count });
+      title.addEventListener('click', () => jumpToSection(sec));
+      const row = h('div', { className: 'row' + (sec.enabled ? '' : ' off') }, check, title,
+        h('span', { className: 'count', textContent: count, title: `${count} sentence${count === 1 ? '' : 's'}` }));
+      row.style.setProperty('--indent', Math.min(sec.level - minLevel, 3));
+      ui.mapRows.set(sec, row);
+      return row;
+    });
+    ui.mapList.replaceChildren(...rows);
+    ui.mapSec = null;
+    updateMapCurrent(true);
+  }
+
+  // Mark the section being read, and keep it in view in the panel.
+  function updateMapCurrent(force = false) {
+    if (!ui) return;
+    const sec = state.queue[state.idx]?.sec || null;
+    if (sec === ui.mapSec && !force) return;
+    ui.mapRows.get(ui.mapSec)?.classList.remove('current');
+    ui.mapSec = sec;
+    const row = ui.mapRows.get(sec);
+    if (!row) return;
+    row.classList.add('current');
+    if (ui.mapPanel.hidden) return;
+    const list = ui.mapList;
+    if (row.offsetTop < list.scrollTop || row.offsetTop + row.offsetHeight > list.scrollTop + list.clientHeight) {
+      list.scrollTop = row.offsetTop - list.clientHeight / 3;
+    }
+  }
+
   function setStatus(text) {
     if (!ui) return;
     ui.statusText = text;
@@ -751,16 +938,18 @@
     ui.rateLabel.textContent = settings.rate.toFixed(1) + '×';
     const total = state.queue.length;
     if (total && state.idx < total) setStatus(`${state.idx + 1} / ${total}`);
+    updateMapCurrent();
   }
 
   async function ensureReady() {
     if (!ui) buildUI();
     if (!state.voices) {
       try {
-        Object.assign(settings, await chrome.storage.sync.get({ rate: 1, voiceName: null }));
+        Object.assign(settings, await chrome.storage.sync.get({ rate: 1, voiceName: null, mapOpen: false }));
       } catch {
         // Fall back to defaults.
       }
+      if (settings.mapOpen) toggleMap(true);
       const voices = await send({ type: 'getVoices' });
       state.voices = Array.isArray(voices) ? voices : [];
       populateVoices();
@@ -773,6 +962,7 @@
     state.gen++;
     clearTimers();
     state.playing = false;
+    state.sections = [];
     state.queue = [];
     state.idx = 0;
     removeHighlights();
@@ -791,6 +981,7 @@
       ArrowLeft: () => jump(-1),
       ArrowUp: () => setRate(settings.rate + RATE_STEP),
       ArrowDown: () => setRate(settings.rate - RATE_STEP),
+      KeyM: () => toggleMap(),
       KeyX: teardown,
     };
     const action = actions[e.code];
@@ -808,9 +999,6 @@
     if (!pos) return;
     e.preventDefault(); // also stops Chrome's Alt+click "download link"
     e.stopPropagation();
-    if (!state.queue.length || findIndex(pos.startContainer, pos.startOffset) < 0) {
-      state.queue = buildQueue(collectBlocks());
-    }
     startAt(pos.startContainer, pos.startOffset);
   }
 

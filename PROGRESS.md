@@ -7,7 +7,8 @@ My own Speechify replacement: a Chrome extension that reads pages aloud with sen
 | Version | Feature | Status |
 | --- | --- | --- |
 | v0.1 | Reads pages with built-in voices, word highlighting, player bar, shortcuts | ✅ Confirmed working in Chrome |
-| v0.2 | Natural AI voices (Kokoro, runs on the laptop's GPU) | ⚠️ Built, **not yet tried in the real extension** |
+| v0.2 | Natural AI voices (Kokoro, runs on the laptop's GPU) | ✅ Confirmed working in Chrome (Heart, 1× and 2×) |
+| v0.3 | Page map: list of sections to tick, untick, and jump to | ✅ Tested in Chrome |
 
 ## Session 1 (2026-10-05)
 
@@ -28,16 +29,23 @@ My own Speechify replacement: a Chrome extension that reads pages aloud with sen
 - 10 AI voices (US and UK English). Heart is the default.
 - Falls back to a built-in voice on computers without WebGPU.
 
+**Tested v0.2 AI voices:** reads on its own with Heart at 1× and 2×, no stalls. Sounded good to the user.
+
+**Put the project on GitHub:** https://github.com/mahmad100/voice-reader (public, branch `main`).
+
+**Built v0.3: page map** (button on the bar, or Alt+Shift+M)
+- Sections come from the article's headings. "References" onwards starts unticked, so the default reading is unchanged (still 225 sentences on "Dyslexia").
+- Tested on "Dyslexia": jump to a section, untick the section being read (moves on), jump into an unticked section, Alt+click into an unticked section.
+
 ## Next session: start here
 
-1. **Test the AI voices in the real extension.** Reload it in `chrome://extensions`, choose "Heart" from the *Natural AI voices* group, and read a page.
-   - If it's stuck on "Loading" or silent: Developer mode → **Inspect views: offscreen.html** → Console. Copy the red errors.
-   - Check that the highlighted word keeps up with the voice, at 1× and at 2×.
-2. Then pick the next feature:
-   - PDF support (PDF.js)
-   - Google Docs support
-   - True pause/resume (right now resume restarts the sentence)
-   - Auto-scroll on/off switch, highlight colors
+1. **Math reading, starting with Greek letters and symbols in math** (the user's choice). Plan:
+   - Keep two versions of each sentence: the text highlighted on the page and the text spoken. Right now they're the same string.
+   - Read `<math>` elements instead of skipping them: Wikipedia includes the LaTeX source. Turn it into speech ("E equals m c squared"), possibly with the Speech Rule Engine that MathJax uses.
+   - Greek letters and symbols: α → "alpha", ≤ → "less than or equal to", ° → "degrees".
+   - The word highlight has to map spoken words back to page text, so an equation is highlighted as one unit.
+   - Test pages: Wikipedia "Mass–energy equivalence", "Normal distribution".
+2. Other ideas: tables read row by row, PDF support (PDF.js), Google Docs, true pause/resume, auto-scroll switch, highlight colors.
 
 ## Where things live
 
