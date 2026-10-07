@@ -24,6 +24,8 @@ const AI_VOICES = [
 
 let speakingTab = null;
 let aiTarget = null; // { tabId, frameId } that AI voice events go to
+let activeEngine = null; // 'ai' or 'tts': which one is speaking (or paused)
+let ttsPaused = false;   // chrome.tts is holding a paused sentence
 let creatingOffscreen = null;
 
 async function hasOffscreen() {
@@ -89,8 +91,17 @@ function stopIconAnim(tabId = iconAnim?.tabId) {
   chrome.action.setIcon({ tabId, imageData: iconImages() }).catch(() => {});
 }
 
+// A paused chrome.tts holds back anything new until it's resumed, so clear the pause first.
+function clearTtsPause() {
+  if (!ttsPaused) return;
+  ttsPaused = false;
+  chrome.tts.stop();
+  chrome.tts.resume();
+}
+
 async function stopAll() {
   chrome.tts.stop();
+  clearTtsPause();
   if (await hasOffscreen()) chrome.runtime.sendMessage({ target: 'offscreen', type: 'stop' }).catch(() => {});
 }
 
@@ -162,6 +173,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const ai =AI_VOICES.find((v) => v.voiceName === msg.voiceName);
       if (ai) {
         chrome.tts.stop();
+        clearTtsPause();
+        activeEngine = 'ai';
         aiTarget = { tabId, frameId };
         ensureOffscreen().then(() => chrome.runtime.sendMessage({
           target: 'offscreen', type: 'speak', id: msg.id, text: msg.text, voice: ai.aiVoice,
@@ -176,6 +189,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       hasOffscreen().then((has) => {
         if (has) chrome.runtime.sendMessage({ target: 'offscreen', type: 'stop' }).catch(() => {});
       });
+      clearTtsPause();
+      activeEngine = 'tts';
       const options = {
         rate: msg.rate,
         enqueue: false,
@@ -203,6 +218,32 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
       sendResponse({ ok: true });
       return;
+
+    case 'pause':
+    case 'resume': {
+      // Hold the sentence where it is, or carry on from there. When that can't be done, the tab
+      // is told, and it stops and later resumes from the word instead.
+      const failed = (to) => chrome.tabs.sendMessage(to.tabId, {
+        type: 'ttsEvent', id: msg.id, ev: { type: msg.type === 'pause' ? 'pauseFailed' : 'resumeFailed' },
+      }, { frameId: to.frameId }).catch(() => {});
+      const tab = { tabId: sender.tab?.id, frameId: sender.frameId };
+      if (tab.tabId !== speakingTab) {
+        failed(tab);
+      } else if (activeEngine === 'ai') {
+        hasOffscreen().then((has) => {
+          if (has) chrome.runtime.sendMessage({ target: 'offscreen', type: msg.type, id: msg.id }).catch(() => failed(tab));
+          else failed(tab);
+        });
+      } else if (msg.type === 'pause') {
+        ttsPaused = true;
+        chrome.tts.pause();
+      } else {
+        ttsPaused = false;
+        chrome.tts.resume();
+      }
+      sendResponse({ ok: true });
+      return;
+    }
 
     case 'iconState':
       if (msg.playing) startIconAnim(sender.tab?.id);

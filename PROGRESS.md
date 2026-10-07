@@ -12,6 +12,7 @@ My own Speechify replacement: a Chrome extension that reads pages aloud with sen
 | v0.4 | Math read aloud (equations, Greek letters, symbols), with a box over equations | ✅ Tested in Chrome on "Mass–energy equivalence" |
 | v0.5 | Click to read, read just a selection, paragraph play buttons, Options panel (line focus, wider spacing, highlight colors, follow along) | ✅ Tested in Chrome. ⚠️ 4 last fixes not yet tried, see below |
 | v0.6 | Renamed Wren. Animated logo. Apple-style glass player you can drag and dock (vertical on the sides). Appearance panel: logo, color, position lock, glass | ✅ Used in Chrome by the user (appearance panel, glass, panels). ⚠️ Last 3 fixes not yet tried, see below |
+| v0.7 | True pause and resume (carries on mid-word), shrink when not in use (with an on/off button on the bar), position picker fix | ✅ Shrink and picker used in Chrome by the user. ⚠️ Pause/resume not yet tried with real voices |
 
 ## Session 1 (2026-10-05)
 
@@ -85,17 +86,30 @@ My own Speechify replacement: a Chrome extension that reads pages aloud with sen
 - **Reading a selected paragraph stopped after the first word.** A triple-click selection ends on Wikipedia's citation "[1]", which isn't spoken, so its position fell back to the start of the paragraph. Text that isn't spoken now maps to the nearest spoken text. Checked on the test page: all three sentences read, then it stopped.
 - The version is now 0.6.0 (Chrome still said 0.5).
 
+## Session 3 (2026-10-07): v0.7
+
+**True pause and resume** (was: resuming restarted the sentence).
+- Pause holds the voice mid-word: `chrome.tts.pause()`/`resume()` for built-in voices, and pausing the `<audio>` clip in `offscreen.js` for AI voices. The word highlight stays on the paused word, and its timing skips the pause.
+- Fallback: if the voice doesn't confirm the pause within 0.3 s, or can't resume (e.g. the AI voice unloaded after 10 minutes), it's stopped, and resume starts from the paused word. Speed and voice changes also carry on from the current word now, instead of restarting the sentence.
+- Skipping to another sentence while paused lets go of the held one. A speed or voice change while paused lets go too (the held audio is at the old setting); play then carries on from the word.
+- Tested on a test page with a fake voice that speaks a word every 100 ms: a voice that can pause (pause, resume, next sentence, nothing repeated), one that can't (stopped, resumed from "their loud songs"), skip while paused, and faster while paused (resumed from "small"). Not yet tried with real voices.
+
+**Shrink when not in use** (Appearance → Position, off by default): the player slims down to the logo and play button, like the iPhone's Dynamic Island, and opens into the full bar when pointed at (after 80 ms, so passing over it doesn't). It shrinks 0.5 s after the pointer leaves, and stays open while a panel is open or it has keyboard focus (a mouse click doesn't count). The hidden controls slide out along the bar, which is placed by the size it's heading to, so it stays anchored to its edge. Works vertical too. Checked on the test page: shrunk at the bottom (stays centered), expanded on hover (same spot as the normal bar), and shrunk on the left. Reduced-motion users get it without the slide. A button on the bar (inward arrows, next to ×) turns it on or off too.
+
+**Fixed:** with shrinking on, tapping an edge in the position picker (or dragging) from a side to the top or bottom left the bar parked high above the edge: the hidden controls kept their vertical-bar heights while the bar was measured. Also, opening a panel while shrunk now always expands the bar.
+
 ## Next session: start here
 
-1. **Check the last v0.6 fixes in Chrome:** scrolling inside a panel (shouldn't move the page), the Both/Sentence/Word switch, and triple-clicking a paragraph then pressing its play button (should read the whole paragraph). Also try the glass slider and a locked drag by hand.
-2. **Check the four v0.5 fixes**, still never tried in Chrome:
+1. **Try pause and resume with real voices:** a Windows voice (Microsoft …), Google US English, and an AI voice (Heart). Pause mid-sentence, wait, resume: it should carry on mid-word. Also pause for over 10 minutes with an AI voice (should resume from the word).
+2. **Check the last v0.6 fixes in Chrome:** scrolling inside a panel (shouldn't move the page), the Both/Sentence/Word switch, and triple-clicking a paragraph then pressing its play button (should read the whole paragraph). Also try the glass slider and a locked drag by hand.
+3. **Check the four v0.5 fixes**, still never tried in Chrome:
    - Starting mid-sentence (click or selection) with an AI voice took 25+ s, because the voice prepared sentences strictly in order. `offscreen.js` now puts what you're waiting for first. Expected: a 1–3 s wait at most.
    - The paragraph play button never went away if the pointer kept moving after leaving the paragraph. It now goes 0.5 s after leaving.
    - Line focus dimmed the whole page while scrolled away from the sentence being read. It now steps aside.
    - A reader left open during an extension reload got stuck in an endless loop of errors (an old bug).
-3. My tests switched on line focus, wider spacing and a green highlight in the user's settings. Switch them back in Options if not wanted.
-4. **Listen to math on a few more pages** and tune the wording: Wikipedia "Normal distribution", "Schrödinger equation", "Quadratic formula". Open questions: say "capital" for Δ vs δ? Absolute value bars |x| are silent.
-5. Other ideas: true pause/resume, skip-content switches (citations, brackets, URLs), auto-hide and a size setting for the player, tables read row by row, PDF support (PDF.js), Google Docs.
+4. My tests switched on line focus, wider spacing and a green highlight in the user's settings. Switch them back in Options if not wanted.
+5. **Listen to math on a few more pages** and tune the wording: Wikipedia "Normal distribution", "Schrödinger equation", "Quadratic formula". Open questions: say "capital" for Δ vs δ? Absolute value bars |x| are silent.
+6. Other ideas: skip-content switches (citations, brackets, URLs), a size setting for the player, tables read row by row, PDF support (PDF.js), Google Docs.
 
 **Testing note:** my Chrome tool can't press browser-level shortcuts or the toolbar icon, and Alt+Shift+letter keys hit the page's own shortcuts. The user has to reload the extension and click the icon; after that I can drive the player bar.
 

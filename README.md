@@ -18,7 +18,7 @@ After changing any file, click the reload arrow on the extension's card in `chro
 | Action | How |
 | --- | --- |
 | Read the page | Click the toolbar icon, or press **Alt+Shift+R** |
-| Pause / resume | Same again, or the big button on the player bar |
+| Pause / resume | Same again, or the big button on the player bar. Resume carries on mid-word, from exactly where it paused |
 | Read from a word | With the player open, **click** any text (see *Starting where you point*) |
 | Read just some text | Select it, then press the play button that appears next to it, or right-click → *Read selected text* |
 | Read on from a selection | Right-click selected text → *Read aloud from here* |
@@ -29,6 +29,7 @@ After changing any file, click the reload arrow on the extension's card in `chro
 | Page map / Options | The list and ⚙ buttons on the bar |
 | Move the player | Drag it by the logo or any empty part of the bar |
 | Change the logo, color, glass or position | Click the logo on the bar |
+| Shrink when not in use | The inward-arrows button next to **×** turns it on or off (highlighted when on) |
 | Close the player | **×** on the bar |
 
 Your speed, voice, Options choices and where you put the player are remembered. The page map, voice and Options panels start closed, and Esc closes them. To change the start/pause shortcut, go to `chrome://extensions/shortcuts`.
@@ -38,7 +39,7 @@ Your speed, voice, Options choices and where you put the player are remembered. 
 A frosted-glass bar that follows your system's light or dark mode. The ring around the play button fills as you get through the article, and the logo moves gently while it reads.
 
 - **Appearance:** click the round logo to choose it (Soundtail, Songbird or Wave) and a color (Ember, Rose, Dusk, Moss or Ink). The color runs through the whole player, the play buttons on the page, and the toolbar icon. The same panel has:
-  - **Position:** a small picture of the screen. Tap an edge to send the player there. **Lock position** stops it being dragged (like an iPhone's rotation lock); a lock badge shows on the logo, and a drag makes the bar shake.
+  - **Position:** a small picture of the screen. Tap an edge to send the player there. **Shrink when not in use** slims the player down to its logo and play button; point at it and it opens into the full bar, then shrinks again half a second after you move away (it stays open while a panel is open). Messages show in a bubble beside it while it's small. **Lock position** stops it being dragged (like an iPhone's rotation lock); a lock badge shows on the logo, and a drag makes the bar shake.
   - **Glass:** a slider from clear to frosted, pill or rounded corners, and a tint in your color. These apply to the bar, the panels and the message bubbles alike; panels stay a little more solid than the bar so their text stays readable.
 
 - **Docking:** push either end of the bar up to the left or right side and it turns into a vertical strip there, wherever you're holding it. Pull it a little way back out and it turns horizontal again. Near the top or bottom edge it docks there horizontally. Anywhere else it floats where you drop it.
@@ -98,6 +99,7 @@ The voice menu's first group, **Natural AI voices**, uses [Kokoro](https://huggi
 - `background.js` speaks through Chrome's `chrome.tts` engine and passes its progress events back to the page.
 - `content.js` finds the article text (skipping menus, sidebars, fact boxes, and reference lists), groups it into sections at each heading for the page map, splits it into sentences, highlights them with the CSS Custom Highlight API, and draws the player bar, the Options panel and the play buttons. The page itself isn't modified, except for one attribute on the article while wider spacing is on.
 - Reading can start or stop partway through a sentence (a clicked word, the end of a selection). That part is spoken as its own piece, and highlighted from the right place.
+- **Pause** holds the voice where it is: `chrome.tts.pause()` for built-in voices, and the paused audio clip for AI voices. Resume carries on mid-word. A voice that can't hold its place (it doesn't confirm within 0.3 s), or a clip that's gone (the AI voice unloads after 10 minutes), is stopped instead, and resume starts again from the word being read. Changing speed or voice, mid-sentence or while paused, also carries on from that word.
 - Voices that report word positions (for example the Windows "Microsoft …" voices) get exact word highlighting. For voices that don't (for example "Google US English"), the highlight follows an estimate based on that voice's measured speaking speed. For AI voices, the estimate is timed against the exact length of each audio clip.
 - `math-speech.js` turns equations (MathML) and math symbols into spoken English. It is injected just before `content.js`, which keeps two versions of the text: what's spoken, and where each part sits on the page, so an equation spoken as several words is highlighted as one unit.
 - `wren-mark.js` draws the three logos and holds the five color palettes. The logo moves slowly while reading, on the player bar (in a circle) and in the toolbar icon (a rounded square). `background.js` sets the toolbar icon to the chosen logo. The PNG icons in `icons/` are Soundtail in Ember; after changing the drawing, run `node icons/build.mjs` to remake them with Chrome.
@@ -113,11 +115,10 @@ npm update kokoro-js
 node build.mjs
 ```
 
-## Known limits (v0.6)
+## Known limits (v0.7)
 
 - **Can't run on:** Chrome's built-in PDF viewer, `chrome://` pages, or the Chrome Web Store. Google Docs draws its text in a way the extension can't read yet.
 - **Speed limits:** Google voices top out around 2× speed. Windows voices go faster.
-- **Pause:** resuming starts the current sentence again.
 - **Math:** matrices and multi-line derivations are read row by row, and very long equations can be hard to follow by ear. Equation boxes don't follow equations inside separately scrolling areas.
 - **AI voice after a jump:** if a sentence is already being generated, it finishes first (about 1–3 s).
 - **Keyboard shortcuts:** only Alt+Shift+R and Alt+Shift+arrows. Alt+Shift+letter keys belong to many sites (on Wikipedia, Alt+Shift+O opens "Log in").
@@ -128,5 +129,4 @@ node build.mjs
 - PDF support with PDF.js
 - Google Docs support
 - Skip-content switches (citations, brackets, URLs), like Speechify's
-- True pause and resume, from the exact word
-- Auto-hide (the player shrinks to its logo while reading) and a size setting for the player
+- A size setting for the player (small, medium, large)

@@ -146,6 +146,33 @@ async function speak({ id, text, voice, rate, upcoming = [] }) {
   if (current === id) emit(id, { type: 'start', duration: clip.duration / rate });
 }
 
+// Pause holds the clip where it is, so resume carries on mid-word. If there's nothing playing to
+// hold (the clip is still being made, or has finished), say so: the reader then stops and
+// resumes from the word instead.
+function pauseAudio(id) {
+  if (player && current === id && !player.paused) {
+    player.pause();
+    emit(id, { type: 'pause' });
+    return;
+  }
+  if (current === id) {
+    current = null; // don't start the clip when it's ready
+    stopAudio();
+  }
+  emit(id, { type: 'pauseFailed' });
+}
+
+function resumeAudio(id) {
+  if (!player || current !== id) {
+    emit(id, { type: 'resumeFailed' });
+    return;
+  }
+  player.play().then(
+    () => { if (current === id) emit(id, { type: 'resume' }); },
+    () => { if (current === id) emit(id, { type: 'resumeFailed' }); },
+  );
+}
+
 // Free the model's memory when the AI voice hasn't been used for a while.
 const IDLE_MS = 10 * 60 * 1000;
 let idleTimer = null;
@@ -159,6 +186,8 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg.target !== 'offscreen') return;
   touch();
   if (msg.type === 'speak') speak(msg);
+  else if (msg.type === 'pause') pauseAudio(msg.id);
+  else if (msg.type === 'resume') resumeAudio(msg.id);
   else if (msg.type === 'stop') {
     current = null;
     stopAudio();

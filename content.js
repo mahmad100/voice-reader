@@ -48,6 +48,7 @@
     hlStyle: 'both',          // 'both', 'sentence' or 'word'
     logo: 'soundtail',        // the logo on the bar and toolbar (see wren-mark.js)
     color: 'ember',           // its color, which is also the player's accent color
+    autoShrink: false,        // shrink to the logo and play button until pointed at
     lockDock: false,          // the bar can't be dragged (it can still be sent to an edge from Appearance)
     glassClarity: 70,         // 0 = clear glass, 100 = frosted
     glassTint: false,         // shade the bar's glass with the chosen color
@@ -70,6 +71,10 @@
     sentenceRange: null,
     idx: 0,
     playing: false,
+    paused: null,     // { id, at, held }: paused mid-sentence. held: the voice is holding its place
+    resuming: null,   // the sentence id while waiting for the voice to confirm it resumed
+    wordAt: null,     // where the word being read starts (model offset), to resume from
+    clipDuration: 0,  // AI voices: the clip's length in seconds
     gen: 0,           // bumped on every speak/stop so stale engine events are ignored
     voices: null,
     voiceKey: 'default',
@@ -637,6 +642,7 @@
   }
 
   function highlightWord(item, start, end) {
+    state.wordAt = item.start + start;
     if (!wordHL) return;
     wordHL.clear();
     const eqs = equationsIn(item, item.start + start, item.start + end);
@@ -759,13 +765,14 @@
   }
 
   // Speak the current sentence. Reading can start at a word partway through it (a click or a
-  // selection): `from` is that word's offset. Without it, a restart of the same sentence (pause
-  // and play, speed or voice change) keeps the word it started from.
+  // selection): `from` is that word's offset. Without it, a restart of the same sentence (a speed
+  // or voice change, or resuming when the voice couldn't hold its place) carries on from the word
+  // being read.
   function speakCurrent(from = null) {
     clearTimers();
     const base = state.queue[state.idx];
     if (!base) return finish();
-    if (from == null && state.current?.base === base) from = state.current.start;
+    if (from == null && (state.current?.base || state.current) === base) from = state.wordAt ?? state.current.start;
     const start = from != null && from > base.start && from < base.end ? from : base.start;
     // Reading just a selection: the last sentence stops where the selection does.
     const end = state.limit?.item === base ? Math.max(start + 1, Math.min(base.end, state.limit.end)) : base.end;
@@ -775,6 +782,10 @@
     state.current = item;
     const id = ++state.gen;
     state.playing = true;
+    state.paused = null;
+    state.resuming = null;
+    state.wordAt = null;
+    state.clipDuration = 0;
     state.startedAt = 0;
     state.sawWord = false;
     highlightSentence(item);
@@ -805,6 +816,7 @@
         break;
       case 'start':
         state.startedAt = performance.now();
+        state.clipDuration = ev.duration || 0;
         state.errors = 0;
         updateUI();
         if (ev.duration) {
@@ -819,7 +831,20 @@
           }, 700));
         }
         break;
+      case 'pause':
+        if (state.paused) state.paused.held = true;
+        break;
+      case 'pauseFailed':
+        dropHold();
+        break;
+      case 'resume':
+        state.resuming = null;
+        break;
+      case 'resumeFailed':
+        if (state.resuming === id) speakCurrent(); // from the word
+        break;
       case 'word': {
+        state.resuming = null;
         if (!state.sawWord) {
           state.sawWord = true;
           wordSupport.set(state.voiceKey, true);
@@ -831,6 +856,7 @@
         break;
       }
       case 'end':
+        state.resuming = null;
         calibrate(item);
         if (!state.sawWord && !wordSupport.has(state.voiceKey)) wordSupport.set(state.voiceKey, false);
         advance();
@@ -918,14 +944,65 @@
 
   function play() {
     if (!state.queue.length) return;
+    if (state.paused) return resumeReading();
     if (state.idx >= state.queue.length) state.idx = 0;
     speakCurrent();
+  }
+
+  // Pause holds the voice where it is, mid-word, so resume carries on from there. A voice that
+  // can't hold its place says so (or doesn't confirm in time): it's stopped, and resume starts
+  // again from the word that was being read.
+  const PAUSE_WAIT = 300;   // ms for the voice to confirm it paused (real ones take a few ms)
+  const RESUME_WAIT = 1200; // ms for it to confirm it resumed
+
+  function pauseReading() {
+    if (!state.playing) return;
+    if (!state.startedAt) return pausePlayback(); // nothing heard yet (an AI voice still preparing)
+    clearTimers();
+    const id = state.gen;
+    state.playing = false;
+    state.resuming = null;
+    state.paused = { id, at: performance.now(), held: false };
+    send({ type: 'pause', id });
+    state.timers.push(setTimeout(() => {
+      if (state.paused?.id === id && !state.paused.held) dropHold();
+    }, PAUSE_WAIT));
+    updateUI();
+  }
+
+  // Let go of a paused voice. Resuming will start again from the word.
+  function dropHold() {
+    if (!state.paused) return;
+    state.paused.held = false;
+    state.gen++; // ignore anything more from the old sentence
+    clearTimers();
+    send({ type: 'stop' });
+  }
+
+  function resumeReading() {
+    const p = state.paused;
+    state.paused = null;
+    if (!p.held || p.id !== state.gen) return speakCurrent();
+    clearTimers();
+    const item = state.current;
+    state.playing = true;
+    if (state.startedAt) state.startedAt += performance.now() - p.at; // the word estimate skips the pause
+    state.resuming = p.id;
+    send({ type: 'resume', id: p.id });
+    state.timers.push(setTimeout(() => {
+      if (state.resuming === p.id && state.gen === p.id) speakCurrent();
+    }, RESUME_WAIT));
+    armWatchdog(p.id, ((state.clipDuration || item.text.length / (5 * settings.rate)) + 10) * 1000);
+    if (!state.sawWord && wordSupport.get(state.voiceKey) !== true) startWordEstimator(item, p.id, state.clipDuration || undefined);
+    updateUI();
   }
 
   function pausePlayback(stopEngine = true) {
     state.gen++;
     clearTimers();
     state.playing = false;
+    state.paused = null;
+    state.resuming = null;
     if (stopEngine) send({ type: 'stop' });
     clearWordHighlight();
     updateUI();
@@ -959,9 +1036,14 @@
     state.idx = Math.max(0, Math.min(state.queue.length - 1, state.idx + delta));
     if (state.limit && state.idx > state.queue.indexOf(state.limit.item)) state.limit = null;
     setDetached(false);
+    state.wordAt = null;
     if (state.playing) {
       speakCurrent();
     } else {
+      if (state.paused) {
+        dropHold();
+        state.paused = null;
+      }
       highlightSentence(state.queue[state.idx]);
       updateUI();
     }
@@ -970,7 +1052,8 @@
   function setRate(rate) {
     settings.rate = Math.round(Math.max(RATE_MIN, Math.min(RATE_MAX, rate)) * 10) / 10;
     chrome.storage.sync.set({ rate: settings.rate }).catch(() => {});
-    if (state.playing) speakCurrent(); // restart the sentence at the new speed
+    if (state.playing) speakCurrent(); // carry on from the word at the new speed
+    else if (state.paused?.held) dropHold(); // resume will start from the word, at the new speed
     updateUI();
   }
 
@@ -979,6 +1062,7 @@
     chrome.storage.sync.set({ voiceName }).catch(() => {});
     updateVoiceUI();
     if (state.playing) speakCurrent();
+    else if (state.paused?.held) dropHold();
   }
 
   // ---------- Starting points ----------
@@ -1131,6 +1215,7 @@
     next: 'M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z',
     voice: 'M9 13c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4zm6.08-7.95c.84 1.18.84 2.71 0 3.89l1.68 1.69c2.02-2.02 2.02-5.07 0-7.27l-1.68 1.69zM20.07 2l-1.63 1.63c2.77 3.02 2.77 7.56 0 10.74L20.07 16c3.9-3.89 3.91-9.95 0-14z',
     target: 'M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm8.94 3A8.994 8.994 0 0 0 13 3.06V1h-2v2.06A8.994 8.994 0 0 0 3.06 11H1v2h2.06A8.994 8.994 0 0 0 11 20.94V23h2v-2.06A8.994 8.994 0 0 0 20.94 13H23v-2h-2.06zM12 19c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z',
+    shrink: 'M22 3.41 16.71 8.7 20 12h-8V4l3.29 3.29L20.59 2 22 3.41zM3.41 22l5.29-5.29L12 20v-8H4l3.29 3.29L2 20.59 3.41 22z',
     lock: 'M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zM9 6c0-1.66 1.34-3 3-3s3 1.34 3 3v2H9V6z',
     close: 'M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z',
     map: 'M3 9h14V7H3v2zm0 4h14v-2H3v2zm0 4h14v-2H3v2zm16 0h2v-2h-2v2zm0-10v2h2V7h-2zm0 6h2v-2h-2v2z',
@@ -1236,9 +1321,17 @@
     .bar { position: fixed; left: 0; top: 0; display: flex; align-items: center; gap: 2px; padding: 6px 12px 6px 7px;
       border-radius: 999px; user-select: none; touch-action: none; cursor: grab;
       transition: left .5s var(--spring), top .5s var(--spring); }
-    .bar.dragging { transition: none; cursor: grabbing; box-shadow: 0 20px 50px rgba(0,0,0,.22), inset 0 .5px 0 var(--edge); }
-    .bar.instant { transition: none; }
+    .bar.dragging, .bar.dragging .more { transition: none; cursor: grabbing; box-shadow: 0 20px 50px rgba(0,0,0,.22), inset 0 .5px 0 var(--edge); }
+    .bar.instant, .bar.instant .more { transition: none; }
     .vertical .bar { flex-direction: column; padding: 7px 6px 10px; }
+    .shrunk .bar { padding-right: 7px; }
+    .vertical.shrunk .bar { padding-bottom: 7px; }
+    /* The parts hidden when shrunk. Their size is set from the script so it can animate. */
+    .more { display: flex; align-items: center; gap: 2px; flex: none; overflow: hidden; padding: 4px 0; margin: -4px 0;
+      transition: width .5s var(--spring), height .5s var(--spring), opacity .3s ease; }
+    .vertical .more { flex-direction: column; padding: 0 4px; margin: 0 -4px; }
+    .shrunk .more { opacity: 0; pointer-events: none; }
+    .shrunk .more.after-play { margin-left: -2px; }
 
     button { all: unset; box-sizing: border-box; cursor: pointer; display: grid; place-items: center; flex: none;
       width: 34px; height: 34px; border-radius: 50%; color: inherit; transition: background-color .15s, transform .15s; }
@@ -1371,7 +1464,7 @@
       background: linear-gradient(var(--accent), var(--accent)) 0 / calc(var(--v, 50) * 1%) 100% no-repeat, var(--track); }
     input.range::-webkit-slider-thumb { appearance: none; width: 22px; height: 22px; border-radius: 50%; background: #fff;
       box-shadow: 0 1px 4px rgba(0,0,0,.3), 0 0 0 .5px rgba(0,0,0,.08); }
-    @media (prefers-reduced-motion: reduce) { .bar, .panel, .toast, input.switch::before { transition: none; animation: none; } }
+    @media (prefers-reduced-motion: reduce) { .bar, .more, .panel, .toast, input.switch::before { transition: none; animation: none; } }
   `;
 
   // Where the bar sits: docked to an edge (vertical on the left and right), or floating where it
@@ -1385,7 +1478,7 @@
     host.style.cssText = 'all:initial;position:fixed;left:0;top:0;width:0;height:0;z-index:2147483647;';
     const shadow = host.attachShadow({ mode: 'open' });
 
-    const playBtn = button('play', 'Play / pause (Alt+Shift+R)', 'play', () => (state.playing ? pausePlayback() : play()));
+    const playBtn = button('play', 'Play / pause (Alt+Shift+R)', 'play', () => (state.playing ? pauseReading() : play()));
     const ring = h('div', { className: 'ring' }, playBtn);
     const rateLabel = h('span', { className: 'rate', title: 'Reading speed' });
     const status = h('span', { className: 'status' });
@@ -1401,6 +1494,10 @@
     voiceBtn.addEventListener('click', () => togglePanel('voice'));
     const mapBtn = button('', 'Page map', 'map', () => toggleMap());
     const optsBtn = button('', 'Options', 'gear', () => toggleOptions());
+    const shrinkBtn = button('', 'Shrink when not in use', 'shrink', () => {
+      setOption('autoShrink', !settings.autoShrink);
+      showToast(settings.autoShrink ? 'Shrinks when you move away' : 'Stays open');
+    });
     const backBtn = h('button', { className: 'chip back', type: 'button', hidden: true,
       title: 'Scroll back to the sentence being read, and follow it again' }, icon('target'), h('span', { textContent: 'Back to reading' }));
     backBtn.addEventListener('click', () => {
@@ -1426,38 +1523,44 @@
       if (e.detail === 0) togglePanel('look');
     });
     const look = buildLook();
-    const bar = h('div', { className: 'bar glass' },
-      logo.btn,
-      button('', 'Previous sentence (Alt+Shift+Left)', 'prev', () => jump(-1)),
-      ring,
-      button('', 'Next sentence (Alt+Shift+Right)', 'next', () => jump(1)),
-      h('span', { className: 'sep' }),
-      h('div', { className: 'group rate-group' }, slower, rateLabel, faster),
-      h('span', { className: 'sep' }),
-      voiceBtn,
-      status,
-      backBtn,
-      mapBtn,
-      optsBtn,
-      button('', 'Close', 'close', teardown),
-    );
+    // Shrunk, only the logo, the play button and "Back to reading" show; the rest is in .more.
+    const mores = [
+      h('div', { className: 'more' }, button('', 'Previous sentence (Alt+Shift+Left)', 'prev', () => jump(-1))),
+      h('div', { className: 'more after-play' },
+        button('', 'Next sentence (Alt+Shift+Right)', 'next', () => jump(1)),
+        h('span', { className: 'sep' }),
+        h('div', { className: 'group rate-group' }, slower, rateLabel, faster),
+        h('span', { className: 'sep' }),
+        voiceBtn,
+        status),
+      h('div', { className: 'more' }, mapBtn, optsBtn, shrinkBtn, button('', 'Close', 'close', teardown)),
+    ];
+    const bar = h('div', { className: 'bar glass' }, logo.btn, mores[0], ring, mores[1], backBtn, mores[2]);
     bar.addEventListener('pointerdown', onBarPointerDown);
     bar.addEventListener('pointermove', onBarPointerMove);
     bar.addEventListener('pointerup', onBarPointerUp);
     bar.addEventListener('pointercancel', onBarPointerUp);
     bar.addEventListener('animationend', () => bar.classList.remove('shake'));
     for (const panel of [mapPanel, voicePanel, opts.panel, look.panel]) panel.addEventListener('wheel', onPanelWheel, { passive: false });
+    // Shrink when not in use: open while pointed at (the bar or a panel) or tabbed into.
+    for (const el of [bar, mapPanel, voicePanel, opts.panel, look.panel]) {
+      el.addEventListener('pointerenter', () => setHover(true));
+      el.addEventListener('pointerleave', () => setHover(false));
+    }
+    bar.addEventListener('focusin', () => updateShrink());
+    bar.addEventListener('focusout', () => scheduleShrink());
 
     const root = h('div', { className: 'root' }, mapPanel, voicePanel, opts.panel, look.panel, toast, bar);
     shadow.append(h('style', { textContent: BAR_CSS }), root);
     document.documentElement.appendChild(host);
 
     ui = {
-      host, root, bar, logo, ring, toast, iconPlaying: false, playBtn, rateLabel, status, voiceBtn, voiceLabel, voiceList,
+      host, root, bar, mores, shrinkBtn, hover: false, shrunk: false, shrinkTimer: 0, logo, ring, toast, iconPlaying: false, playBtn, rateLabel, status, voiceBtn, voiceLabel, voiceList,
       mapBtn, optsBtn, backBtn, opts, mapPanel, mapList, mapRows: new Map(), statusText: '', drag: null, dragDock: null,
       look, panels: { look: { panel: look.panel, btn: logo.btn }, map: { panel: mapPanel, btn: mapBtn }, voice: { panel: voicePanel, btn: voiceBtn }, opts: { panel: opts.panel, btn: optsBtn } },
     };
     bar.classList.add('instant'); // appear in place, don't fly in from the corner
+    ui.shrunk = shouldShrink();
     layoutUI();
     requestAnimationFrame(() => ui?.bar.classList.remove('instant'));
     window.addEventListener('resize', layoutUI);
@@ -1478,12 +1581,27 @@
   function layoutUI() {
     if (!ui) return;
     const d = ui.dragDock || settings.dock || DEFAULT_SETTINGS.dock;
-    ui.root.classList.toggle('vertical', d.edge === 'left' || d.edge === 'right');
+    const vertical = d.edge === 'left' || d.edge === 'right';
+    ui.root.classList.toggle('vertical', vertical);
+    ui.root.classList.toggle('shrunk', ui.shrunk);
+    // The hidden parts grow and shrink along the bar, so it's placed by the size it's heading to:
+    // its size now, plus how much they'll grow. Their size across the bar is left to them, or a
+    // bar that just turned from vertical to horizontal would still be as tall as the vertical one.
+    for (const m of ui.mores) m.style[vertical ? 'width' : 'height'] = '';
+    const w0 = ui.bar.offsetWidth;
+    const h0 = ui.bar.offsetHeight;
+    let grow = 0;
+    for (const m of ui.mores) {
+      const now = vertical ? m.offsetHeight : m.offsetWidth;
+      const want = !settings.autoShrink ? null : ui.shrunk ? 0 : vertical ? m.scrollHeight : m.scrollWidth;
+      m.style[vertical ? 'height' : 'width'] = want != null ? `${want}px` : '';
+      grow += (want ?? (vertical ? m.offsetHeight : m.offsetWidth)) - now;
+    }
     const { W, H } = viewport();
     const M = DOCK_MARGIN;
-    const w = ui.bar.offsetWidth;
-    const hgt = ui.bar.offsetHeight;
-    if (!ui.root.classList.contains('vertical')) ui.hSize = { w, h: hgt }; // for judging drags
+    const w = w0 + (vertical ? 0 : grow);
+    const hgt = h0 + (vertical ? grow : 0);
+    if (!vertical && !ui.shrunk) ui.hSize = { w, h: hgt }; // for judging drags
     const clampX = (x) => Math.max(M, Math.min(W - M - w, x));
     const clampY = (y) => Math.max(M, Math.min(H - M - hgt, y));
     const left = d.edge === 'left' ? M : d.edge === 'right' ? W - M - w : clampX(d.x * W - w / 2);
@@ -1611,6 +1729,40 @@
     setDock(dock);
   }
 
+  // ---------- Shrink when not in use ----------
+
+  const EXPAND_DELAY = 80;  // ms of pointing before it opens, so passing over it doesn't
+  const SHRINK_DELAY = 500; // ms after the pointer leaves (NN/g's timing for things shown on hover)
+
+  function shouldShrink() {
+    if (!ui || !settings.autoShrink || ui.hover || ui.drag) return false;
+    if (Object.values(ui.panels).some(({ panel }) => !panel.hidden)) return false;
+    return !ui.root.querySelector(':focus-visible'); // keyboard focus keeps it open; a mouse click doesn't
+  }
+
+  function updateShrink() {
+    if (!ui) return;
+    clearTimeout(ui.shrinkTimer);
+    const shrunk = shouldShrink();
+    if (shrunk === ui.shrunk) return;
+    ui.shrunk = shrunk;
+    layoutUI();
+  }
+
+  function scheduleShrink() {
+    if (!ui) return;
+    clearTimeout(ui.shrinkTimer);
+    ui.shrinkTimer = setTimeout(updateShrink, SHRINK_DELAY);
+  }
+
+  function setHover(hover) {
+    if (!ui) return;
+    ui.hover = hover;
+    clearTimeout(ui.shrinkTimer);
+    if (hover) ui.shrinkTimer = setTimeout(updateShrink, EXPAND_DELAY);
+    else scheduleShrink();
+  }
+
   // ---------- Panels ----------
 
   // Scrolling over a panel scrolls only the panel, never the page behind it: the list stops at
@@ -1631,7 +1783,9 @@
       btn.classList.toggle('on', on);
       btn.setAttribute('aria-expanded', String(on));
     }
+    if (open) updateShrink(); // a panel keeps the bar open
     layoutUI();
+    if (!open) scheduleShrink();
     if (open && name === 'map') updateMapCurrent(true);
     if (open && name === 'voice') ui.voiceList.querySelector('.on')?.scrollIntoView({ block: 'nearest' });
   }
@@ -1714,6 +1868,10 @@
     look.dockInfo.replaceChildren(h('b', { textContent: DOCK_NAMES[edge] || DOCK_NAMES.bottom }),
       settings.lockDock ? 'Locked in place. Tap an edge to move it.' : 'Drag the logo to move it, or tap an edge.');
     look.lock.checked = !!settings.lockDock;
+    look.shrink.checked = !!settings.autoShrink;
+    ui.shrinkBtn.classList.toggle('on', !!settings.autoShrink);
+    ui.shrinkBtn.setAttribute('aria-pressed', String(!!settings.autoShrink));
+    ui.shrinkBtn.title = `Shrink when not in use: ${settings.autoShrink ? 'on' : 'off'}`;
     look.tint.checked = !!settings.glassTint;
     look.clarity.value = settings.glassClarity;
     const shapes = Object.fromEntries(Object.entries(ui.look.shapes).map(([k, v]) => [k, v.btn]));
@@ -1737,6 +1895,7 @@
     if (key === 'follow' && value) setDetached(false);
     if (key === 'logo' || key === 'color') applyLook();
     if (/^(glass|barShape|lockDock)/.test(key)) applyGlass();
+    if (key === 'autoShrink') scheduleShrink(); // shrinks once you've moved away
     updateOptionsUI();
   }
 
@@ -1781,6 +1940,9 @@
       screen.append(b);
     }
     const dockInfo = h('div', { className: 'dockinfo' });
+    const shrink = h('input', { type: 'checkbox', className: 'switch' });
+    shrink.setAttribute('role', 'switch');
+    shrink.addEventListener('change', () => setOption('autoShrink', shrink.checked));
     const lock = h('input', { type: 'checkbox', className: 'switch' });
     lock.setAttribute('role', 'switch');
     lock.addEventListener('change', () => setOption('lockDock', lock.checked));
@@ -1813,12 +1975,13 @@
         h('div', { className: 'label', textContent: 'Color' }), colorRow,
         h('div', { className: 'label', textContent: 'Position' }),
         h('div', { className: 'dockpick' }, screen, dockInfo),
+        h('label', { className: 'opt' }, h('span', {}, 'Shrink when not in use', h('small', { textContent: 'Shows just the logo and play button. Point at it to see everything.' })), shrink),
         h('label', { className: 'opt' }, h('span', {}, 'Lock position', h('small', { textContent: 'Keep the player where it is, so it can\'t be dragged by accident.' })), lock),
         h('div', { className: 'label', textContent: 'Glass' }),
         h('div', { className: 'slider' }, 'Clear', clarity, 'Frosted'),
         shapeSeg,
         h('label', { className: 'opt' }, h('span', {}, 'Tint with color', h('small', { textContent: 'Shade the glass with your color.' })), tint)));
-    return { panel, shapes, colors, docks, dockInfo, lock, clarity, barShapes, tint };
+    return { panel, shapes, colors, docks, dockInfo, shrink, lock, clarity, barShapes, tint };
   }
 
   const DOCK_TITLES = [['top', 'Dock at the top'], ['bottom', 'Dock at the bottom'], ['left', 'Dock on the left (vertical)'],
@@ -1969,7 +2132,7 @@
     if (!ui) return;
     ui.statusText = text;
     ui.status.textContent = text;
-    showToast(isMessage && ui.root.classList.contains('vertical') ? text : '');
+    showToast(isMessage && (ui.shrunk || ui.root.classList.contains('vertical')) ? text : '');
   }
 
   // A bubble beside the bar for a few seconds ('' hides it).
@@ -2014,6 +2177,7 @@
       ui?.bar.classList.add('instant');
       layoutUI();
       requestAnimationFrame(() => ui?.bar.classList.remove('instant'));
+      scheduleShrink(); // the full bar shows briefly, then shrinks if that's switched on
       const voices = await send({ type: 'getVoices' });
       state.voices = Array.isArray(voices) ? voices : [];
       populateVoices();
@@ -2024,7 +2188,7 @@
   }
 
   function teardown() {
-    if (state.playing) send({ type: 'stop' });
+    if (state.playing || state.paused) send({ type: 'stop' });
     state.gen++;
     clearTimers();
     state.playing = false;
@@ -2045,6 +2209,7 @@
     if (ui) {
       cancelAnimationFrame(ui.logo.raf);
       clearTimeout(ui.toastTimer);
+      clearTimeout(ui.shrinkTimer);
     }
     window.removeEventListener('resize', layoutUI);
     ui?.host.remove();
@@ -2404,7 +2569,7 @@
     switch (msg.type) {
       case 'toggle':
         if (!ui || hasSelection()) startReading({ fromSelection: true });
-        else if (state.playing) pausePlayback();
+        else if (state.playing) pauseReading();
         else play();
         break;
       case 'readPage':

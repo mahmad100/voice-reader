@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Wren",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Wren reads web pages aloud with word-by-word highlighting, including natural AI voices that run on your computer.",
   "permissions": ["activeTab", "scripting", "tts", "storage", "contextMenus", "offscreen"],
   "content_security_policy": {
