@@ -1,8 +1,8 @@
-# Voice Reader: Progress
+# Wren: Progress
 
 My own Speechify replacement: a Chrome extension that reads pages aloud with sentence and word highlighting.
 
-## Status (2026-10-05)
+## Status (2026-10-07)
 
 | Version | Feature | Status |
 | --- | --- | --- |
@@ -11,6 +11,7 @@ My own Speechify replacement: a Chrome extension that reads pages aloud with sen
 | v0.3 | Page map: list of sections to tick, untick, and jump to | ✅ Tested in Chrome |
 | v0.4 | Math read aloud (equations, Greek letters, symbols), with a box over equations | ✅ Tested in Chrome on "Mass–energy equivalence" |
 | v0.5 | Click to read, read just a selection, paragraph play buttons, Options panel (line focus, wider spacing, highlight colors, follow along) | ✅ Tested in Chrome. ⚠️ 4 last fixes not yet tried, see below |
+| v0.6 | Renamed Wren. Animated logo. Apple-style glass player you can drag and dock (vertical on the sides). Appearance panel: logo, color, position lock, glass | ✅ Used in Chrome by the user (appearance panel, glass, panels). ⚠️ Last 3 fixes not yet tried, see below |
 
 ## Session 1 (2026-10-05)
 
@@ -63,16 +64,38 @@ My own Speechify replacement: a Chrome extension that reads pages aloud with sen
 - The user asked for no extra shortcuts. Alt+Shift+M/O/X were removed: they clash with Wikipedia's own Alt+Shift shortcuts (O opened "Log in", X opens a random article).
 - Tested in Chrome on "Mass–energy equivalence": the click preview and click-to-read, clicking text outside the article, selection reading, the paragraph button appearing after 0.45 s, line focus, spacing, green highlight, and "Back to reading".
 
+## Session 2 (2026-10-07)
+
+**Renamed to Wren** (was "Voice Reader"): extension name, page titles, log tags and docs. The folder and the GitHub repo are still called `voice-reader`.
+
+**Logo:** picked "Soundtail" (in orange) from three ideas: a wren whose cocked tail is a fan of three sound-level bars. `wren-mark.js` draws it. It's on the player bar, and while reading its tail sways slowly. It eases in and out instead of starting or stopping suddenly. The toolbar icon sways too. The PNG icons are made from the same drawing (`node icons/build.mjs`). The tail went through a few shapes: side-by-side bars looked like a hand, and a fan from one point reads as a tail.
+
+**Redesigned the player** (Apple style): frosted glass in light and dark mode, Wren orange, and a progress ring around the play button.
+- Drag it anywhere. Near the top or bottom edge it docks there; once either end of the bar reaches the left or right side it turns vertical there, wherever it's held; anywhere else it floats. It glides into place, and its position is remembered (`dock` setting). 
+- Click the logo (now in a circle, like the buttons) for **Appearance**: three logos (Soundtail, Songbird, Wave), five colors (Ember, Rose, Dusk, Moss, Ink), a position picker (tap an edge of a small screen) with **Lock position** (lock badge on the logo, a shake if dragged), and glass settings (clear to frosted, pill or rounded, tint). The color themes the whole player, the play buttons on the page, and the toolbar icon. The glass settings apply to the bar, panels and message bubbles alike. Saved as the `logo`, `color`, `lockDock`, `glassClarity`, `glassTint` and `barShape` settings.
+- The voice menu is now a panel with a list of voices, opened from a button that shows the voice's name. Options use on/off switches, and the highlight style is a segmented control.
+- Panels open on the side facing the page and stay inside the window. Esc closes them.
+- Checked with screenshots of a test page (Chrome's extension features stubbed): bottom, top, left and right docks, floating, dark mode, each panel, dragging, and a locked drag. The user then used it in Chrome.
+
+**Fixed after the user tried it in Chrome:**
+- Clicking the logo did nothing: the bar holds the pointer during a possible drag, so the click went to the bar. A press and release on the logo without moving now opens Appearance.
+- The bar only turned vertical when the pointer itself reached the side. It now turns vertical when either end of the bar does, wherever it's held.
+- Scrolling a panel sometimes scrolled the page behind it (and turned off follow along). Panels now keep the scroll.
+- The highlight style switch wrapped "Sentence and word" onto two lines and looked heavy in dark mode. Now "Both · Sentence · Word" on one line, iPhone-style.
+- **Reading a selected paragraph stopped after the first word.** A triple-click selection ends on Wikipedia's citation "[1]", which isn't spoken, so its position fell back to the start of the paragraph. Text that isn't spoken now maps to the nearest spoken text. Checked on the test page: all three sentences read, then it stopped.
+- The version is now 0.6.0 (Chrome still said 0.5).
+
 ## Next session: start here
 
-1. **Reload the extension and check the four fixes made after testing** (all in the code, none tried in Chrome yet):
+1. **Check the last v0.6 fixes in Chrome:** scrolling inside a panel (shouldn't move the page), the Both/Sentence/Word switch, and triple-clicking a paragraph then pressing its play button (should read the whole paragraph). Also try the glass slider and a locked drag by hand.
+2. **Check the four v0.5 fixes**, still never tried in Chrome:
    - Starting mid-sentence (click or selection) with an AI voice took 25+ s, because the voice prepared sentences strictly in order. `offscreen.js` now puts what you're waiting for first. Expected: a 1–3 s wait at most.
    - The paragraph play button never went away if the pointer kept moving after leaving the paragraph. It now goes 0.5 s after leaving.
    - Line focus dimmed the whole page while scrolled away from the sentence being read. It now steps aside.
    - A reader left open during an extension reload got stuck in an endless loop of errors (an old bug).
-2. My tests switched on line focus, wider spacing and a green highlight in the user's settings. Switch them back in Options if not wanted.
-3. **Listen to math on a few more pages** and tune the wording: Wikipedia "Normal distribution", "Schrödinger equation", "Quadratic formula". Open questions: say "capital" for Δ vs δ? Absolute value bars |x| are silent.
-4. Other ideas: skip-content switches (citations, brackets, URLs), tables read row by row, PDF support (PDF.js), Google Docs, true pause/resume.
+3. My tests switched on line focus, wider spacing and a green highlight in the user's settings. Switch them back in Options if not wanted.
+4. **Listen to math on a few more pages** and tune the wording: Wikipedia "Normal distribution", "Schrödinger equation", "Quadratic formula". Open questions: say "capital" for Δ vs δ? Absolute value bars |x| are silent.
+5. Other ideas: true pause/resume, skip-content switches (citations, brackets, URLs), auto-hide and a size setting for the player, tables read row by row, PDF support (PDF.js), Google Docs.
 
 **Testing note:** my Chrome tool can't press browser-level shortcuts or the toolbar icon, and Alt+Shift+letter keys hit the page's own shortcuts. The user has to reload the extension and click the icon; after that I can drive the player bar.
 

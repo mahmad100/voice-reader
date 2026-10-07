@@ -1,4 +1,4 @@
-// Voice Reader math speech: turns MathML (the machine-readable copy that Wikipedia, MathJax and
+// Wren math speech: turns MathML (the machine-readable copy that Wikipedia, MathJax and
 // KaTeX keep behind their equations) into English for the voice, e.g. E=mc² -> "E equals m c
 // squared", and names Greek letters and math symbols that appear in ordinary text.
 // Injected before content.js, which uses VoiceReaderMath.

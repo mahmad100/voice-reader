@@ -1,4 +1,4 @@
-// Voice Reader content script: finds the readable text on the page, drives playback
+// Wren content script: finds the readable text on the page, drives playback
 // sentence by sentence, highlights the current sentence and word, and shows the player bar.
 (() => {
   if (window.__voiceReaderLoaded) return;
@@ -46,6 +46,13 @@
     wideSpacing: false,       // wider letter, word and line spacing in the article
     hlColor: 'yellow',
     hlStyle: 'both',          // 'both', 'sentence' or 'word'
+    logo: 'soundtail',        // the logo on the bar and toolbar (see wren-mark.js)
+    color: 'ember',           // its color, which is also the player's accent color
+    lockDock: false,          // the bar can't be dragged (it can still be sent to an edge from Appearance)
+    glassClarity: 70,         // 0 = clear glass, 100 = frosted
+    glassTint: false,         // shade the bar's glass with the chosen color
+    barShape: 'pill',         // 'pill' or 'rounded'
+    dock: { edge: 'bottom', x: 0.5, y: 0.5 }, // where the bar sits: an edge, or 'free' (x, y are fractions of the window)
   };
   const settings = { ...DEFAULT_SETTINGS };
   const HL_COLORS = {
@@ -265,7 +272,12 @@
       }
     }
     const last = [...model.segs].reverse().find((s) => s.node === node);
-    return last ? last.end : 0;
+    if (last) return last.end;
+    // Text that isn't spoken (a citation like "[1]", say): the nearest spoken text before it for
+    // an end, or after it for a start. A selection often ends on one, at the end of a paragraph.
+    const precedes = (s) => (s.el || s.node).compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING;
+    if (atEnd) return [...model.segs].reverse().find(precedes)?.end ?? 0;
+    return model.segs.find((s) => !precedes(s))?.start ?? model.text.length;
   }
 
   function sentenceSegmenter() {
@@ -328,10 +340,11 @@
       const model = q[i].model;
       if (!model.el.contains(node)) continue;
       const off = modelOffset(model, node, offset);
-      for (let j = i; j < q.length && q[j].model === model; j++) {
+      let j = i;
+      for (; j < q.length && q[j].model === model; j++) {
         if (q[j].end > off) return j;
       }
-      return i;
+      return j - 1; // past the last sentence of this block: that sentence
     }
     return -1;
   }
@@ -542,7 +555,7 @@
       style.textContent =
         (settings.hlStyle !== 'word' ? `::highlight(voice-reader-sentence){background-color:${c.sentence};}` : '') +
         (settings.hlStyle !== 'sentence' ? `::highlight(voice-reader-word){background-color:${c.word};color:#111;}` : '') +
-        '::highlight(voice-reader-hover){text-decoration:underline 2px dotted #4f8cff;text-underline-offset:4px;}' +
+        `::highlight(voice-reader-hover){text-decoration:underline 2px dotted ${lookPalette().accent[0]};text-underline-offset:4px;}` +
         (settings.wideSpacing ? SPACING_CSS : '');
     }
     const spaced = document.querySelector('[data-voice-reader-root]');
@@ -828,7 +841,7 @@
         pausePlayback(false);
         break;
       case 'error':
-        console.warn('[Voice Reader] speech error:', ev.errorMessage);
+        console.warn('[Wren] speech error:', ev.errorMessage);
         if (/webgpu/i.test(ev.errorMessage || '')) {
           // No GPU support for AI voices here: fall back to a built-in voice.
           state.aiUnavailable = true;
@@ -964,6 +977,7 @@
   function setVoice(voiceName) {
     settings.voiceName = voiceName;
     chrome.storage.sync.set({ voiceName }).catch(() => {});
+    updateVoiceUI();
     if (state.playing) speakCurrent();
   }
 
@@ -1115,6 +1129,9 @@
     pause: 'M6 5h4v14H6zm8 0h4v14h-4z',
     prev: 'M6 6h2v12H6zm3.5 6 8.5 6V6z',
     next: 'M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z',
+    voice: 'M9 13c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4zm6.08-7.95c.84 1.18.84 2.71 0 3.89l1.68 1.69c2.02-2.02 2.02-5.07 0-7.27l-1.68 1.69zM20.07 2l-1.63 1.63c2.77 3.02 2.77 7.56 0 10.74L20.07 16c3.9-3.89 3.91-9.95 0-14z',
+    target: 'M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm8.94 3A8.994 8.994 0 0 0 13 3.06V1h-2v2.06A8.994 8.994 0 0 0 3.06 11H1v2h2.06A8.994 8.994 0 0 0 11 20.94V23h2v-2.06A8.994 8.994 0 0 0 20.94 13H23v-2h-2.06zM12 19c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z',
+    lock: 'M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zM9 6c0-1.66 1.34-3 3-3s3 1.34 3 3v2H9V6z',
     close: 'M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z',
     map: 'M3 9h14V7H3v2zm0 4h14v-2H3v2zm0 4h14v-2H3v2zm16 0h2v-2h-2v2zm0-10v2h2V7h-2zm0 6h2v-2h-2v2z',
     gear: 'M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z',
@@ -1143,115 +1160,492 @@
     return b;
   }
 
+  // The Wren logo on the bar (drawn by wren-mark.js). Its tail sways while reading, easing in
+  // and out over LOGO_EASE ms instead of starting or stopping abruptly.
+  const LOGO_SIZE = 28;
+  const LOGO_EASE = 700;
+
+  function buildLogo() {
+    const canvas = h('canvas');
+    const scale = Math.max(2, Math.ceil(window.devicePixelRatio || 1));
+    canvas.width = canvas.height = LOGO_SIZE * scale;
+    const btn = h('button', { className: 'logo', type: 'button', title: 'Appearance (drag to move the player)' }, canvas,
+      h('span', { className: 'badge', title: 'Position locked' }, icon('lock')));
+    btn.setAttribute('aria-label', 'Logo and color');
+    const logo = { btn, canvas, ctx: canvas.getContext('2d'), playing: false, levels: [1, 1, 1], from: [1, 1, 1], since: 0, raf: 0 };
+    drawLogoFrame(logo, performance.now());
+    return logo;
+  }
+
+  function drawLogoFrame(logo, now) {
+    if (typeof WREN_MARK === 'undefined') return;
+    const target = logo.playing ? WREN_MARK.levels(now / 1000) : [1, 1, 1];
+    const p = Math.min(1, (now - logo.since) / LOGO_EASE);
+    const ease = p * p * (3 - 2 * p);
+    logo.levels = logo.from.map((f, i) => f + (target[i] - f) * ease);
+    WREN_MARK.draw(logo.ctx, logo.canvas.width, { shape: settings.logo, color: settings.color, levels: logo.levels, round: true });
+    logo.raf = logo.playing || p < 1 ? requestAnimationFrame((t) => drawLogoFrame(logo, t)) : 0;
+  }
+
+  function setLogoPlaying(logo, playing) {
+    if (logo.playing === playing) return;
+    logo.playing = playing;
+    logo.from = logo.levels;
+    logo.since = performance.now();
+    if (!logo.raf) logo.raf = requestAnimationFrame((t) => drawLogoFrame(logo, t));
+  }
+
+  // Frosted glass that follows the system's light or dark mode, in the chosen color (applyLook
+  // sets --g1, --g2 and the light and dark accents; Ember until then).
   const BAR_CSS = `
     :host { all: initial; }
-    .bar { display: flex; align-items: center; gap: 4px; padding: 6px 10px; background: #1f2330; color: #f2f4f8;
-      border-radius: 999px; box-shadow: 0 8px 28px rgba(0,0,0,.35); font: 13px/1.2 system-ui, -apple-system, "Segoe UI", sans-serif;
-      user-select: none; }
-    button { all: unset; cursor: pointer; display: grid; place-items: center; width: 32px; height: 32px;
-      border-radius: 50%; color: inherit; font-weight: 700; font-size: 16px; }
-    button:hover { background: rgba(255,255,255,.12); }
-    button:focus-visible { outline: 2px solid #8ab4ff; outline-offset: 1px; }
-    button.play { width: 40px; height: 40px; background: #4f8cff; color: #fff; }
-    button.play:hover { background: #3f7cf0; }
-    button.small { width: 26px; height: 26px; }
+    .root {
+      --glass-rgb: 246,246,248; --glass: rgba(var(--glass-rgb), var(--glass-a, .78)); --panel-rgb: 248,248,250; --panel: rgba(var(--panel-rgb), var(--panel-a, .93)); --solid: #f6f6f8; --thumb: #fff; --fg: #1d1d1f; --muted: rgba(60,60,67,.62);
+      --hover: rgba(0,0,0,.055); --press: rgba(0,0,0,.1); --line: rgba(0,0,0,.09); --edge: rgba(255,255,255,.75);
+      --track: rgba(0,0,0,.1); --accent: var(--a-l, #ff5e3a); --accent-text: var(--t-l, #e5482a);
+      --on: color-mix(in srgb, var(--accent) 13%, transparent);
+      --brand: linear-gradient(135deg, var(--g1, #ffb547), var(--g2, #ff5e3a));
+      --glow: color-mix(in srgb, var(--g2, #ff5e3a) 35%, transparent);
+      --shadow: 0 12px 40px rgba(0,0,0,.14), 0 2px 8px rgba(0,0,0,.07);
+      --spring: cubic-bezier(.3,1.3,.5,1);
+      font: 13px/1.3 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+      color: var(--fg); -webkit-font-smoothing: antialiased; letter-spacing: -.005em;
+    }
+    @media (prefers-color-scheme: dark) {
+      .root {
+        --glass-rgb: 38,38,40; --panel-rgb: 36,36,38; --solid: #262628; --thumb: #636366; --fg: #f5f5f7; --muted: rgba(235,235,245,.6);
+        --hover: rgba(255,255,255,.08); --press: rgba(255,255,255,.14); --line: rgba(255,255,255,.1); --edge: rgba(255,255,255,.1);
+        --track: rgba(255,255,255,.16); --accent: var(--a-d, #ff6a45); --accent-text: var(--t-d, #ff8a66);
+        --on: color-mix(in srgb, var(--accent) 22%, transparent);
+        --shadow: 0 12px 40px rgba(0,0,0,.5), 0 2px 8px rgba(0,0,0,.3);
+      }
+    }
+    .glass { background-color: var(--glass); -webkit-backdrop-filter: blur(var(--blur, 28px)) saturate(180%);
+      backdrop-filter: blur(var(--blur, 28px)) saturate(180%);
+      border: .5px solid var(--line); box-shadow: var(--shadow), inset 0 .5px 0 var(--edge); }
+    @supports not (backdrop-filter: blur(1px)) { .glass { background-color: var(--solid); } }
+    .tinted .glass { background-image: linear-gradient(135deg, color-mix(in srgb, var(--g1, #ffb547) 22%, transparent),
+      color-mix(in srgb, var(--g2, #ff5e3a) 22%, transparent)); }
+    .rounded .bar { border-radius: 18px; }
+    .rounded .panel { border-radius: 14px; }
+    .rounded .toast { border-radius: 12px; }
+    .locked .bar { cursor: default; }
+    .bar.shake { animation: shake .42s ease; }
+    @keyframes shake { 20%, 60% { translate: -6px 0; } 40%, 80% { translate: 6px 0; } }
+
+    .bar { position: fixed; left: 0; top: 0; display: flex; align-items: center; gap: 2px; padding: 6px 12px 6px 7px;
+      border-radius: 999px; user-select: none; touch-action: none; cursor: grab;
+      transition: left .5s var(--spring), top .5s var(--spring); }
+    .bar.dragging { transition: none; cursor: grabbing; box-shadow: 0 20px 50px rgba(0,0,0,.22), inset 0 .5px 0 var(--edge); }
+    .bar.instant { transition: none; }
+    .vertical .bar { flex-direction: column; padding: 7px 6px 10px; }
+
+    button { all: unset; box-sizing: border-box; cursor: pointer; display: grid; place-items: center; flex: none;
+      width: 34px; height: 34px; border-radius: 50%; color: inherit; transition: background-color .15s, transform .15s; }
+    button:hover { background-color: var(--hover); }
+    button:active { transform: scale(.92); background-color: var(--press); }
+    button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     svg { width: 20px; height: 20px; fill: currentColor; }
+
+    button.logo { position: relative; width: 36px; height: 36px; margin-right: 4px; cursor: grab; }
+    .locked button.logo { cursor: pointer; }
+    .badge { position: absolute; right: -2px; bottom: -2px; width: 15px; height: 15px; border-radius: 50%; display: none;
+      place-items: center; background: var(--solid); color: var(--fg); box-shadow: 0 1px 3px rgba(0,0,0,.28); }
+    .badge svg { width: 9px; height: 9px; }
+    .locked .badge { display: grid; }
+    button.logo:hover { background: none; transform: scale(1.06); }
+    button.logo:active { background: none; }
+    button.logo.on { background: none; box-shadow: 0 0 0 2px var(--accent); }
+    button.logo canvas { width: 32px; height: 32px; border-radius: 50%; filter: drop-shadow(0 2px 5px var(--glow)); }
+    .vertical button.logo { margin: 0 0 4px; }
+    .ring { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; flex: none; margin: 0 2px;
+      background: conic-gradient(var(--accent) calc(var(--p, 0) * 1turn), var(--track) 0); }
+    .vertical .ring { margin: 2px 0; }
+    button.play, button.play:hover { width: 38px; height: 38px; background: var(--brand); color: #fff;
+      box-shadow: 0 2px 8px var(--glow), inset 0 .5px 0 rgba(255,255,255,.4); }
+    button.play svg { width: 22px; height: 22px; }
+
+    .group { display: flex; align-items: center; gap: 2px; }
+    .vertical .group { flex-direction: column; }
+    .vertical .group.rate-group { flex-direction: column-reverse; }
+    button.small { width: 28px; height: 28px; font-size: 18px; font-weight: 500; }
     .rate { min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; font-weight: 600; }
-    select { font: inherit; background: #2b3142; color: inherit; border: 1px solid #3a4258; border-radius: 8px;
-      padding: 5px 6px; max-width: 190px; cursor: pointer; }
-    option, optgroup { background: #2b3142; color: #f2f4f8; }
-    .status { min-width: 64px; opacity: .75; font-variant-numeric: tabular-nums; padding: 0 6px; white-space: nowrap; text-align: center; }
-    .sep { width: 1px; height: 22px; background: rgba(255,255,255,.15); margin: 0 4px; }
-    button.on { background: rgba(138,180,255,.22); color: #cfe0ff; }
-    .wrap { display: flex; flex-direction: column; align-items: center; gap: 8px; }
-    .map { width: 380px; max-width: calc(100vw - 32px); max-height: min(50vh, 440px); display: flex; flex-direction: column;
-      background: #1f2330; color: #f2f4f8; border-radius: 14px; box-shadow: 0 8px 28px rgba(0,0,0,.35);
-      font: 13px/1.3 system-ui, -apple-system, "Segoe UI", sans-serif; user-select: none; overflow: hidden; }
-    .map[hidden] { display: none; }
-    .map-head { padding: 10px 14px 8px; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,.1); }
-    .map-head small { display: block; font-weight: 400; opacity: .6; margin-top: 2px; }
-    .map-list { position: relative; overflow-y: auto; padding: 4px 0; scrollbar-width: thin; }
-    .row { display: flex; align-items: center; gap: 6px; padding: 0 10px 0 calc(10px + var(--indent, 0) * 16px);
-      border-left: 3px solid transparent; }
-    .row.off .title, .row.off .count { opacity: .45; }
-    .row.current { border-left-color: #ffd54f; background: rgba(255,213,79,.08); }
-    .row.current .title { font-weight: 600; }
-    .row input { margin: 0; accent-color: #4f8cff; cursor: pointer; flex: none; }
-    .row button.title { display: block; width: auto; height: auto; flex: 1; min-width: 0; padding: 6px; border-radius: 6px;
-      font-weight: 400; font-size: 13px; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .row button.title:disabled { cursor: default; }
-    .count { opacity: .55; font-variant-numeric: tabular-nums; font-size: 12px; flex: none; }
-    .group { padding: 10px 14px 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; opacity: .55; }
-    .opt { display: flex; gap: 10px; align-items: flex-start; padding: 7px 14px; cursor: pointer; }
-    .opt:hover { background: rgba(255,255,255,.05); }
-    .opt input { margin: 2px 0 0; accent-color: #4f8cff; cursor: pointer; flex: none; }
-    .opt small { display: block; opacity: .6; font-size: 12px; margin-top: 2px; line-height: 1.35; }
-    .swatches { display: flex; align-items: center; gap: 10px; padding: 6px 14px 12px; }
-    button.swatch { width: 22px; height: 22px; border-radius: 50%; box-shadow: inset 0 0 0 2px rgba(0,0,0,.15); }
-    button.swatch.on { outline: 2px solid #fff; outline-offset: 2px; }
-    .swatches select { margin-left: auto; }
-    button.back { width: auto; height: 28px; padding: 0 12px; border-radius: 999px; background: #ffd54f; color: #111;
-      font-size: 12px; font-weight: 600; white-space: nowrap; }
-    button.back:hover { background: #ffe082; }
+    .vertical .rate { min-width: 0; font-size: 12px; padding: 1px 0; }
+    .sep { width: 1px; height: 22px; background: var(--line); margin: 0 6px; flex: none; }
+    .vertical .sep { width: 22px; height: 1px; margin: 6px 0; }
+    button.chip { width: auto; height: 32px; padding: 0 12px 0 8px; border-radius: 999px; gap: 6px; display: inline-flex;
+      align-items: center; font-weight: 500; max-width: 160px; }
+    button.chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .vertical button.chip { width: 34px; height: 34px; padding: 0; justify-content: center; }
+    .vertical button.chip span { display: none; }
+    button.on, button.on:hover { background-color: var(--on); color: var(--accent-text); }
+    button.back, button.back:hover { background: var(--brand); color: #fff; margin: 0 4px; }
     button.back[hidden] { display: none; }
+    .vertical button.back { margin: 4px 0; }
+    .status { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap;
+      min-width: 64px; padding: 0 8px; text-align: center; }
+    .vertical .status { display: none; }
+
+    .panel, .toast { position: fixed; left: 0; top: 0; animation: pop .28s var(--spring); }
+    .panel.glass { background-color: var(--panel); }
+    .panel { width: 340px; max-width: calc(100vw - 24px); display: flex; flex-direction: column; border-radius: 22px;
+      overflow: hidden; user-select: none; }
+    .panel[hidden], .toast[hidden] { display: none; }
+    @keyframes pop { from { opacity: 0; transform: scale(.96); } }
+    .toast { padding: 8px 14px; border-radius: 999px; font-size: 12px; font-weight: 500; white-space: nowrap; pointer-events: none; }
+    .head { padding: 15px 18px 8px; font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
+    .head small { display: block; margin-top: 3px; font-size: 12px; font-weight: 400; letter-spacing: 0; color: var(--muted); }
+    .list { position: relative; overflow-y: auto; overscroll-behavior: contain; padding: 2px 8px 10px; scrollbar-width: thin; }
+    .label { padding: 12px 10px 5px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+
+    .row { display: flex; align-items: center; gap: 8px; padding: 0 8px 0 calc(8px + var(--indent, 0) * 14px); border-radius: 10px; }
+    .row:hover { background: var(--hover); }
+    .row.off .title, .row.off .count { opacity: .45; }
+    .row.current, .row.current:hover { background: var(--on); }
+    .row.current .title { font-weight: 600; color: var(--accent-text); }
+    .row button.title, .row button.title:hover { display: block; width: auto; height: auto; flex: 1; min-width: 0; padding: 8px 2px;
+      border-radius: 6px; background: none; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .row button.title:active { transform: none; }
+    .row button.title:disabled { cursor: default; }
+    .count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; flex: none; }
+
+    input.check { appearance: none; margin: 0; width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid var(--muted);
+      display: grid; place-items: center; flex: none; cursor: pointer; transition: background-color .15s, border-color .15s; }
+    input.check:checked { background: var(--accent); border-color: var(--accent); }
+    input.check:checked::after { content: ""; width: 4px; height: 8px; border: solid #fff; border-width: 0 2px 2px 0;
+      transform: translateY(-1px) rotate(45deg); }
+
+    .opt { display: flex; align-items: center; gap: 12px; padding: 9px 10px; border-radius: 10px; cursor: pointer; }
+    .opt:hover { background: var(--hover); }
+    .opt span { flex: 1; min-width: 0; }
+    .opt small { display: block; margin-top: 2px; font-size: 12px; line-height: 1.35; color: var(--muted); }
+    input.switch { appearance: none; margin: 0; position: relative; width: 40px; height: 24px; border-radius: 999px; flex: none;
+      background: var(--track); cursor: pointer; transition: background-color .2s; }
+    input.switch::before { content: ""; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%;
+      background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.3); transition: transform .3s var(--spring); }
+    input.switch:checked { background: var(--accent); }
+    input.switch:checked::before { transform: translateX(16px); }
+
+    .swatches { display: flex; align-items: center; gap: 12px; padding: 6px 10px 4px; }
+    button.swatch { width: 24px; height: 24px; box-shadow: inset 0 0 0 1px rgba(0,0,0,.12); }
+    button.swatch.on { box-shadow: inset 0 0 0 1px rgba(0,0,0,.12), 0 0 0 2px var(--solid), 0 0 0 4px var(--accent); }
+    .seg { display: flex; gap: 2px; margin: 8px 10px 6px; padding: 2px; border-radius: 9px; background: var(--track); }
+    .seg button { flex: 1 1 0; min-width: 0; width: auto; height: 28px; padding: 0 6px; border-radius: 7px; font-size: 12px;
+      font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: background-color .2s, box-shadow .2s; }
+    .seg button:hover { background: none; }
+    .seg button:active { transform: none; }
+    .seg button:focus-visible { outline-offset: -2px; }
+    .seg button.on, .seg button.on:hover { background: var(--thumb); color: var(--fg); font-weight: 600;
+      box-shadow: 0 1px 3px rgba(0,0,0,.14), 0 0 0 .5px rgba(0,0,0,.04); }
+
+    button.voice { display: flex; justify-content: space-between; gap: 8px; width: 100%; height: auto; padding: 8px 10px; border-radius: 10px; }
+    button.voice:active { transform: none; }
+    button.voice span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    button.voice small { color: var(--muted); font-size: 12px; flex: none; }
+    button.voice.on, button.voice.on:hover { background: var(--on); color: var(--accent-text); font-weight: 600; }
+
+    .shapes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 4px 4px 2px; }
+    button.shape { display: grid; gap: 6px; justify-items: center; width: auto; height: auto; padding: 10px 4px 8px; border-radius: 12px;
+      font-size: 12px; font-weight: 500; color: var(--muted); }
+    button.shape:active { transform: scale(.97); }
+    button.shape canvas { width: 48px; height: 48px; }
+    button.shape.on, button.shape.on:hover { background: var(--on); color: var(--accent-text); font-weight: 600; }
+    .colors { display: flex; gap: 14px; padding: 6px 10px 4px; }
+    .colors button.swatch { width: 28px; height: 28px; }
+    .dockpick { display: flex; align-items: center; gap: 14px; padding: 6px 10px 4px; }
+    .screen { position: relative; width: 112px; height: 72px; flex: none; border-radius: 10px; border: 1.5px solid var(--line); background: var(--hover); }
+    .screen button { position: absolute; width: auto; height: auto; padding: 4px; border-radius: 999px; background: var(--track);
+      background-clip: content-box; }
+    .screen button:hover { background-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+    .screen button.on, .screen button.on:hover { background-color: var(--accent); }
+    .screen .d-bottom { left: 28px; right: 28px; bottom: 2px; height: 15px; }
+    .screen .d-top { left: 28px; right: 28px; top: 2px; height: 15px; }
+    .screen .d-left { top: 16px; bottom: 16px; left: 2px; width: 15px; }
+    .screen .d-right { top: 16px; bottom: 16px; right: 2px; width: 15px; }
+    .screen .d-free { left: 40px; top: 26px; width: 32px; height: 20px; border-radius: 6px; pointer-events: none; opacity: 0; }
+    .screen .d-free.on { opacity: 1; }
+    .dockinfo { font-size: 12px; line-height: 1.35; color: var(--muted); }
+    .dockinfo b { display: block; margin-bottom: 2px; font-size: 13px; font-weight: 600; color: var(--fg); }
+    .slider { display: flex; align-items: center; gap: 10px; padding: 8px 10px; font-size: 12px; color: var(--muted); }
+    input.range { appearance: none; flex: 1; min-width: 0; height: 4px; margin: 0; border-radius: 999px; cursor: pointer;
+      background: linear-gradient(var(--accent), var(--accent)) 0 / calc(var(--v, 50) * 1%) 100% no-repeat, var(--track); }
+    input.range::-webkit-slider-thumb { appearance: none; width: 22px; height: 22px; border-radius: 50%; background: #fff;
+      box-shadow: 0 1px 4px rgba(0,0,0,.3), 0 0 0 .5px rgba(0,0,0,.08); }
+    @media (prefers-reduced-motion: reduce) { .bar, .panel, .toast, input.switch::before { transition: none; animation: none; } }
   `;
+
+  // Where the bar sits: docked to an edge (vertical on the left and right), or floating where it
+  // was dropped. Drag it by the logo or any empty part of the bar; double-click the logo to reset.
+  const DOCK_MARGIN = 16; // px from the window edge
+  const DOCK_ZONE = 24;   // a bar dragged this close to an edge docks there (vertical on the sides)
+  const PANEL_GAP = 10;
 
   function buildUI() {
     const host = h('div', { id: 'voice-reader-host' });
-    host.style.cssText = 'all:initial;position:fixed;z-index:2147483647;left:50%;bottom:20px;transform:translateX(-50%);';
+    host.style.cssText = 'all:initial;position:fixed;left:0;top:0;width:0;height:0;z-index:2147483647;';
     const shadow = host.attachShadow({ mode: 'open' });
 
     const playBtn = button('play', 'Play / pause (Alt+Shift+R)', 'play', () => (state.playing ? pausePlayback() : play()));
+    const ring = h('div', { className: 'ring' }, playBtn);
     const rateLabel = h('span', { className: 'rate', title: 'Reading speed' });
     const status = h('span', { className: 'status' });
-    const voiceSelect = h('select', { title: 'Voice' });
-    voiceSelect.addEventListener('change', () => setVoice(voiceSelect.value));
+    const toast = h('div', { className: 'toast glass', hidden: true });
 
     const slower = h('button', { className: 'small', title: 'Slower (Alt+Shift+Down)', type: 'button' }, '−');
     slower.addEventListener('click', () => setRate(settings.rate - RATE_STEP));
     const faster = h('button', { className: 'small', title: 'Faster (Alt+Shift+Up)', type: 'button' }, '+');
     faster.addEventListener('click', () => setRate(settings.rate + RATE_STEP));
 
+    const voiceLabel = h('span');
+    const voiceBtn = h('button', { className: 'chip', title: 'Voice', type: 'button' }, icon('voice'), voiceLabel);
+    voiceBtn.addEventListener('click', () => togglePanel('voice'));
     const mapBtn = button('', 'Page map', 'map', () => toggleMap());
     const optsBtn = button('', 'Options', 'gear', () => toggleOptions());
-    const opts = buildOptions();
-    const backBtn = h('button', { className: 'back', type: 'button', hidden: true, textContent: 'Back to reading',
-      title: 'Scroll back to the sentence being read, and follow it again' });
+    const backBtn = h('button', { className: 'chip back', type: 'button', hidden: true,
+      title: 'Scroll back to the sentence being read, and follow it again' }, icon('target'), h('span', { textContent: 'Back to reading' }));
     backBtn.addEventListener('click', () => {
       setDetached(false);
       const item = state.current;
       if (item && state.sentenceRange) scrollIntoViewIfNeeded(item.model.el, state.sentenceRange, true);
     });
-    const mapList = h('div', { className: 'map-list' });
-    const mapPanel = h('div', { className: 'map', hidden: true },
-      h('div', { className: 'map-head' }, 'Page map',
-        h('small', { textContent: 'Tick the sections to read. Click a title to jump there.' })),
-      mapList,
-    );
 
-    const bar = h('div', { className: 'bar' },
+    const mapList = h('div', { className: 'list' });
+    const mapPanel = h('div', { className: 'panel glass', hidden: true },
+      h('div', { className: 'head' }, 'Page map', h('small', { textContent: 'Tick the sections to read. Click a title to jump there.' })),
+      mapList);
+    const voiceList = h('div', { className: 'list' });
+    const voicePanel = h('div', { className: 'panel glass', hidden: true },
+      h('div', { className: 'head' }, 'Voice', h('small', { textContent: 'Natural AI voices run on this computer.' })),
+      voiceList);
+    const opts = buildOptions();
+
+    const logo = buildLogo();
+    // A mouse press on the logo might be a drag, so onBarPointerUp opens the panel for those.
+    // This handles the keyboard (Enter or Space), which sends a click with no pointer.
+    logo.btn.addEventListener('click', (e) => {
+      if (e.detail === 0) togglePanel('look');
+    });
+    const look = buildLook();
+    const bar = h('div', { className: 'bar glass' },
+      logo.btn,
       button('', 'Previous sentence (Alt+Shift+Left)', 'prev', () => jump(-1)),
-      playBtn,
+      ring,
       button('', 'Next sentence (Alt+Shift+Right)', 'next', () => jump(1)),
       h('span', { className: 'sep' }),
-      slower, rateLabel, faster,
+      h('div', { className: 'group rate-group' }, slower, rateLabel, faster),
       h('span', { className: 'sep' }),
-      voiceSelect,
+      voiceBtn,
       status,
       backBtn,
       mapBtn,
       optsBtn,
       button('', 'Close', 'close', teardown),
     );
-    shadow.append(h('style', { textContent: BAR_CSS }), h('div', { className: 'wrap' }, mapPanel, opts.panel, bar));
+    bar.addEventListener('pointerdown', onBarPointerDown);
+    bar.addEventListener('pointermove', onBarPointerMove);
+    bar.addEventListener('pointerup', onBarPointerUp);
+    bar.addEventListener('pointercancel', onBarPointerUp);
+    bar.addEventListener('animationend', () => bar.classList.remove('shake'));
+    for (const panel of [mapPanel, voicePanel, opts.panel, look.panel]) panel.addEventListener('wheel', onPanelWheel, { passive: false });
+
+    const root = h('div', { className: 'root' }, mapPanel, voicePanel, opts.panel, look.panel, toast, bar);
+    shadow.append(h('style', { textContent: BAR_CSS }), root);
     document.documentElement.appendChild(host);
 
-    ui = { host, playBtn, rateLabel, status, voiceSelect, mapBtn, optsBtn, backBtn, opts, mapPanel, mapList, mapRows: new Map(), statusText: '' };
+    ui = {
+      host, root, bar, logo, ring, toast, iconPlaying: false, playBtn, rateLabel, status, voiceBtn, voiceLabel, voiceList,
+      mapBtn, optsBtn, backBtn, opts, mapPanel, mapList, mapRows: new Map(), statusText: '', drag: null, dragDock: null,
+      look, panels: { look: { panel: look.panel, btn: logo.btn }, map: { panel: mapPanel, btn: mapBtn }, voice: { panel: voicePanel, btn: voiceBtn }, opts: { panel: opts.panel, btn: optsBtn } },
+    };
+    bar.classList.add('instant'); // appear in place, don't fly in from the corner
+    layoutUI();
+    requestAnimationFrame(() => ui?.bar.classList.remove('instant'));
+    window.addEventListener('resize', layoutUI);
     window.addEventListener('keydown', onKeyDown, true);
     window.addEventListener('click', onAltClick, true);
     window.addEventListener('click', onPageClick, true);
     buildPointerButtons();
     installHighlights();
+  }
+
+  // ---------- Bar position ----------
+
+  function viewport() {
+    return { W: document.documentElement.clientWidth || innerWidth, H: innerHeight };
+  }
+
+  // Place the bar from its dock, then whatever floats beside it (an open panel, a message).
+  function layoutUI() {
+    if (!ui) return;
+    const d = ui.dragDock || settings.dock || DEFAULT_SETTINGS.dock;
+    ui.root.classList.toggle('vertical', d.edge === 'left' || d.edge === 'right');
+    const { W, H } = viewport();
+    const M = DOCK_MARGIN;
+    const w = ui.bar.offsetWidth;
+    const hgt = ui.bar.offsetHeight;
+    if (!ui.root.classList.contains('vertical')) ui.hSize = { w, h: hgt }; // for judging drags
+    const clampX = (x) => Math.max(M, Math.min(W - M - w, x));
+    const clampY = (y) => Math.max(M, Math.min(H - M - hgt, y));
+    const left = d.edge === 'left' ? M : d.edge === 'right' ? W - M - w : clampX(d.x * W - w / 2);
+    const top = d.edge === 'top' ? M : d.edge === 'bottom' ? H - M - hgt : clampY(d.y * H - hgt / 2);
+    ui.bar.style.left = `${left}px`;
+    ui.bar.style.top = `${top}px`;
+    const rect = { left, top, right: left + w, bottom: top + hgt };
+    // Panels open on the side facing the page.
+    const side = { bottom: 'above', top: 'below', left: 'right', right: 'left' }[d.edge] ||
+      (top + hgt / 2 > H / 2 ? 'above' : 'below');
+    let panelOpen = false;
+    for (const { panel } of Object.values(ui.panels)) {
+      if (panel.hidden) continue;
+      panelOpen = true;
+      placeBeside(panel, rect, side, true);
+    }
+    ui.toast.hidden = !ui.toastText || panelOpen;
+    if (!ui.toast.hidden) placeBeside(ui.toast, rect, side, false);
+  }
+
+  function placeBeside(el, rect, side, limitHeight) {
+    const { W, H } = viewport();
+    const M = DOCK_MARGIN;
+    if (limitHeight) {
+      const room = side === 'above' ? rect.top - PANEL_GAP - M
+        : side === 'below' ? H - rect.bottom - PANEL_GAP - M : H - 2 * M;
+      el.style.maxHeight = `${Math.max(160, Math.min(480, room))}px`;
+    }
+    const w = el.offsetWidth;
+    const hgt = el.offsetHeight;
+    const cx = (rect.left + rect.right) / 2;
+    const cy = (rect.top + rect.bottom) / 2;
+    const clampX = (x) => Math.max(M, Math.min(W - M - w, x));
+    const clampY = (y) => Math.max(M, Math.min(H - M - hgt, y));
+    let left, top;
+    if (side === 'above' || side === 'below') {
+      left = clampX(cx - w / 2);
+      top = side === 'above' ? rect.top - PANEL_GAP - hgt : rect.bottom + PANEL_GAP;
+    } else {
+      left = side === 'right' ? rect.right + PANEL_GAP : rect.left - PANEL_GAP - w;
+      top = clampY(cy - hgt / 2);
+    }
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+    el.style.transformOrigin = { above: 'bottom', below: 'top', right: 'left', left: 'right' }[side];
+  }
+
+  function setDock(dock) {
+    settings.dock = dock;
+    chrome.storage.sync.set({ dock }).catch(() => {});
+    layoutUI();
+    updateOptionsUI(); // the position picker
+  }
+
+  // Where the bar would go if dropped with the pointer here. It's judged by where the horizontal
+  // bar would be, not the pointer: push either end of it up to the left or right side and it
+  // turns vertical there, wherever it was grabbed.
+  function dockAt(x, y) {
+    const { W, H } = viewport();
+    const g = ui.drag;
+    const { w, h: hgt } = ui.hSize || { w: ui.bar.offsetWidth, h: ui.bar.offsetHeight };
+    const left = x - g.fx * w;
+    const top = y - g.fy * hgt;
+    const edge = left < DOCK_ZONE ? 'left' : left + w > W - DOCK_ZONE ? 'right'
+      : top + hgt > H - DOCK_ZONE ? 'bottom' : top < DOCK_ZONE ? 'top' : 'free';
+    // Docked, the bar slides along the edge with the pointer. Floating, it keeps the spot where
+    // it was grabbed under the pointer.
+    const cx = edge === 'free' ? left + w / 2 : x;
+    const cy = edge === 'free' ? top + hgt / 2 : y;
+    return { edge, x: cx / W, y: cy / H };
+  }
+
+  function onBarPointerDown(e) {
+    if (e.button !== 0 || e.target.closest('button:not(.logo),input,select')) return;
+    e.preventDefault();
+    const r = ui.bar.getBoundingClientRect();
+    // Where along the horizontal bar it's held. A vertical bar counts as held by the end nearest
+    // its side, so a short pull away from either side turns it horizontal again.
+    const vertical = ui.root.classList.contains('vertical');
+    const fx = !vertical ? (e.clientX - r.left) / r.width : r.left < viewport().W / 2 ? 0.05 : 0.95;
+    const fy = vertical ? 0.5 : (e.clientY - r.top) / r.height;
+    ui.drag = { id: e.pointerId, x0: e.clientX, y0: e.clientY, fx, fy, moved: false, onLogo: !!e.target.closest('button.logo'),
+      locked: settings.lockDock };
+    try {
+      ui.bar.setPointerCapture(e.pointerId); // keep getting moves when the pointer outruns the bar
+    } catch {
+      // Not a real pointer.
+    }
+  }
+
+  function onBarPointerMove(e) {
+    const g = ui?.drag;
+    if (!g || e.pointerId !== g.id) return;
+    if (!g.moved && Math.hypot(e.clientX - g.x0, e.clientY - g.y0) < 4) return;
+    if (g.locked) {
+      // Locked: a little shake says so, once per drag.
+      if (!g.moved) {
+        ui.bar.classList.remove('shake');
+        void ui.bar.offsetWidth; // restart the animation
+        ui.bar.classList.add('shake');
+        showToast('Position locked');
+      }
+      g.moved = true;
+      return;
+    }
+    g.moved = true;
+    ui.bar.classList.add('dragging');
+    ui.dragDock = dockAt(e.clientX, e.clientY);
+    layoutUI();
+  }
+
+  function onBarPointerUp(e) {
+    const g = ui?.drag;
+    if (!g || e.pointerId !== g.id) return;
+    ui.drag = null;
+    ui.bar.classList.remove('dragging');
+    // The bar holds on to the pointer while it's down, so the logo never gets the click itself.
+    if (!g.moved) {
+      if (g.onLogo) togglePanel('look');
+      return;
+    }
+    if (g.locked) return;
+    const dock = ui.dragDock;
+    ui.dragDock = null;
+    setDock(dock);
+  }
+
+  // ---------- Panels ----------
+
+  // Scrolling over a panel scrolls only the panel, never the page behind it: the list stops at
+  // its ends (overscroll-behavior), and the parts that can't scroll (the title) swallow the wheel.
+  function onPanelWheel(e) {
+    e.stopPropagation(); // and it isn't scrolling away from the reading
+    const list = e.currentTarget.querySelector('.list');
+    if (!list?.contains(e.target) || list.scrollHeight <= list.clientHeight) e.preventDefault();
+  }
+
+  // One panel at a time: the page map, voices, or Options.
+  function togglePanel(name, open) {
+    if (!ui) return;
+    open ??= ui.panels[name].panel.hidden;
+    for (const [key, { panel, btn }] of Object.entries(ui.panels)) {
+      const on = open && key === name;
+      panel.hidden = !on;
+      btn.classList.toggle('on', on);
+      btn.setAttribute('aria-expanded', String(on));
+    }
+    layoutUI();
+    if (open && name === 'map') updateMapCurrent(true);
+    if (open && name === 'voice') ui.voiceList.querySelector('.on')?.scrollIntoView({ block: 'nearest' });
+  }
+
+  function toggleMap(open) {
+    togglePanel('map', open);
+  }
+
+  function toggleOptions(open) {
+    togglePanel('opts', open);
+  }
+
+  function closePanels() {
+    if (ui && Object.values(ui.panels).some(({ panel }) => !panel.hidden)) togglePanel('map', false);
   }
 
   // ---------- Options panel ----------
@@ -1268,20 +1662,23 @@
       ['wideSpacing', 'Wider text spacing', 'More space between letters, words and lines. Can make text easier to read.'],
     ]],
   ];
+  // [value, label, tooltip]
+  const HL_STYLES = [['both', 'Both', 'Sentence and word'], ['sentence', 'Sentence', 'Sentence only'], ['word', 'Word', 'Word only']];
 
   function buildOptions() {
     const inputs = {};
-    const body = h('div', { className: 'map-list opts-list' });
+    const body = h('div', { className: 'list' });
     for (const [group, rows] of SWITCHES) {
-      body.append(h('div', { className: 'group', textContent: group }));
+      body.append(h('div', { className: 'label', textContent: group }));
       for (const [key, label, help] of rows) {
-        const input = h('input', { type: 'checkbox' });
+        const input = h('input', { type: 'checkbox', className: 'switch' });
+        input.setAttribute('role', 'switch');
         input.addEventListener('change', () => setOption(key, input.checked));
         inputs[key] = input;
-        body.append(h('label', { className: 'opt' }, input, h('span', {}, label, h('small', { textContent: help }))));
+        body.append(h('label', { className: 'opt' }, h('span', {}, label, h('small', { textContent: help })), input));
       }
     }
-    body.append(h('div', { className: 'group', textContent: 'Highlight' }));
+    body.append(h('div', { className: 'label', textContent: 'Highlight' }));
     const swatches = {};
     const swatchRow = h('div', { className: 'swatches' });
     for (const [key, c] of Object.entries(HL_COLORS)) {
@@ -1292,27 +1689,41 @@
       swatches[key] = b;
       swatchRow.append(b);
     }
-    const styleSelect = h('select', { title: 'What to highlight' },
-      h('option', { value: 'both', textContent: 'Sentence and word' }),
-      h('option', { value: 'sentence', textContent: 'Sentence only' }),
-      h('option', { value: 'word', textContent: 'Word only' }));
-    styleSelect.addEventListener('change', () => setOption('hlStyle', styleSelect.value));
-    swatchRow.append(styleSelect);
-    body.append(swatchRow);
-    const panel = h('div', { className: 'map opts', hidden: true },
-      h('div', { className: 'map-head' }, 'Options', h('small', { textContent: 'Ways to start reading, and how reading looks.' })),
+    const styles = {};
+    const seg = h('div', { className: 'seg', role: 'group' });
+    seg.setAttribute('aria-label', 'What to highlight');
+    for (const [key, label, title] of HL_STYLES) {
+      const b = h('button', { type: 'button', textContent: label, title });
+      b.addEventListener('click', () => setOption('hlStyle', key));
+      styles[key] = b;
+      seg.append(b);
+    }
+    body.append(swatchRow, seg);
+    const panel = h('div', { className: 'panel glass', hidden: true },
+      h('div', { className: 'head' }, 'Options', h('small', { textContent: 'Ways to start reading, and how reading looks.' })),
       body);
-    return { panel, inputs, swatches, styleSelect };
+    return { panel, inputs, swatches, styles };
   }
 
   function updateOptionsUI() {
     if (!ui) return;
     for (const [key, input] of Object.entries(ui.opts.inputs)) input.checked = !!settings[key];
-    for (const [key, b] of Object.entries(ui.opts.swatches)) {
-      b.classList.toggle('on', key === settings.hlColor);
-      b.setAttribute('aria-pressed', String(key === settings.hlColor));
+    const look = ui.look;
+    const edge = (settings.dock || DEFAULT_SETTINGS.dock).edge;
+    for (const [key, b] of Object.entries(look.docks)) b.classList.toggle('on', key === edge);
+    look.dockInfo.replaceChildren(h('b', { textContent: DOCK_NAMES[edge] || DOCK_NAMES.bottom }),
+      settings.lockDock ? 'Locked in place. Tap an edge to move it.' : 'Drag the logo to move it, or tap an edge.');
+    look.lock.checked = !!settings.lockDock;
+    look.tint.checked = !!settings.glassTint;
+    look.clarity.value = settings.glassClarity;
+    const shapes = Object.fromEntries(Object.entries(ui.look.shapes).map(([k, v]) => [k, v.btn]));
+    for (const [group, value] of [[ui.opts.swatches, settings.hlColor], [ui.opts.styles, settings.hlStyle],
+      [shapes, settings.logo], [ui.look.colors, settings.color], [ui.look.barShapes, settings.barShape]]) {
+      for (const [key, b] of Object.entries(group)) {
+        b.classList.toggle('on', key === value);
+        b.setAttribute('aria-pressed', String(key === value));
+      }
     }
-    ui.opts.styleSelect.value = settings.hlStyle;
   }
 
   function setOption(key, value) {
@@ -1324,23 +1735,136 @@
     if (key === 'selectionButton' && !value) hideSelectionButton();
     if (key === 'paragraphButtons' && !value) hideParagraphButton();
     if (key === 'follow' && value) setDetached(false);
+    if (key === 'logo' || key === 'color') applyLook();
+    if (/^(glass|barShape|lockDock)/.test(key)) applyGlass();
     updateOptionsUI();
   }
 
-  function toggleOptions(open) {
+  // ---------- Appearance: the logo and color, chosen by clicking the logo ----------
+
+  function lookPalette() {
+    return (typeof WREN_MARK !== 'undefined' && WREN_MARK.palettes[settings.color]) ||
+      { g: ['#ffb547', '#ff5e3a'], accent: ['#ff5e3a', '#ff6a45'], text: ['#e5482a', '#ff8a66'] };
+  }
+
+  function buildLook() {
+    const shapes = {};
+    const shapeRow = h('div', { className: 'shapes' });
+    const colors = {};
+    const colorRow = h('div', { className: 'colors' });
+    if (typeof WREN_MARK !== 'undefined') {
+      for (const [key, name] of Object.entries(WREN_MARK.shapes)) {
+        const canvas = h('canvas', { width: 96, height: 96 });
+        const b = h('button', { className: 'shape', type: 'button' }, canvas, name);
+        b.addEventListener('click', () => setOption('logo', key));
+        shapes[key] = { btn: b, canvas };
+        shapeRow.append(b);
+      }
+      for (const [key, pal] of Object.entries(WREN_MARK.palettes)) {
+        const b = h('button', { className: 'swatch', type: 'button', title: pal.name });
+        b.setAttribute('aria-label', `${pal.name} color`);
+        b.style.background = `linear-gradient(135deg, ${pal.g[0]}, ${pal.g[1]})`;
+        b.addEventListener('click', () => setOption('color', key));
+        colors[key] = b;
+        colorRow.append(b);
+      }
+    }
+    // Position: a small screen with the four edges to send the player to.
+    const docks = {};
+    const screen = h('div', { className: 'screen' });
+    for (const [edge, title] of DOCK_TITLES) {
+      const b = h('button', { className: `d-${edge}`, type: 'button', title });
+      b.setAttribute('aria-label', title);
+      if (edge === 'free') b.disabled = true;
+      else b.addEventListener('click', () => setDock({ edge, x: 0.5, y: 0.5 }));
+      docks[edge] = b;
+      screen.append(b);
+    }
+    const dockInfo = h('div', { className: 'dockinfo' });
+    const lock = h('input', { type: 'checkbox', className: 'switch' });
+    lock.setAttribute('role', 'switch');
+    lock.addEventListener('change', () => setOption('lockDock', lock.checked));
+
+    // Glass: how clear it is, its corners, and a tint.
+    const clarity = h('input', { type: 'range', className: 'range', min: 0, max: 100, step: 1 });
+    clarity.setAttribute('aria-label', 'Glass, from clear to frosted');
+    clarity.addEventListener('input', () => {
+      settings.glassClarity = +clarity.value; // live, saved when let go
+      applyGlass();
+    });
+    clarity.addEventListener('change', () => setOption('glassClarity', +clarity.value));
+    const barShapes = {};
+    const shapeSeg = h('div', { className: 'seg', role: 'group' });
+    shapeSeg.setAttribute('aria-label', 'Shape of the player');
+    for (const [key, label] of [['pill', 'Pill'], ['rounded', 'Rounded']]) {
+      const b = h('button', { type: 'button', textContent: label });
+      b.addEventListener('click', () => setOption('barShape', key));
+      barShapes[key] = b;
+      shapeSeg.append(b);
+    }
+    const tint = h('input', { type: 'checkbox', className: 'switch' });
+    tint.setAttribute('role', 'switch');
+    tint.addEventListener('change', () => setOption('glassTint', tint.checked));
+
+    const panel = h('div', { className: 'panel glass', hidden: true },
+      h('div', { className: 'head' }, 'Appearance', h('small', { textContent: 'The logo, color, glass, and where the player sits.' })),
+      h('div', { className: 'list' },
+        h('div', { className: 'label', textContent: 'Logo' }), shapeRow,
+        h('div', { className: 'label', textContent: 'Color' }), colorRow,
+        h('div', { className: 'label', textContent: 'Position' }),
+        h('div', { className: 'dockpick' }, screen, dockInfo),
+        h('label', { className: 'opt' }, h('span', {}, 'Lock position', h('small', { textContent: 'Keep the player where it is, so it can\'t be dragged by accident.' })), lock),
+        h('div', { className: 'label', textContent: 'Glass' }),
+        h('div', { className: 'slider' }, 'Clear', clarity, 'Frosted'),
+        shapeSeg,
+        h('label', { className: 'opt' }, h('span', {}, 'Tint with color', h('small', { textContent: 'Shade the glass with your color.' })), tint)));
+    return { panel, shapes, colors, docks, dockInfo, lock, clarity, barShapes, tint };
+  }
+
+  const DOCK_TITLES = [['top', 'Dock at the top'], ['bottom', 'Dock at the bottom'], ['left', 'Dock on the left (vertical)'],
+    ['right', 'Dock on the right (vertical)'], ['free', 'Floating']];
+  const DOCK_NAMES = { top: 'Docked at the top', bottom: 'Docked at the bottom', left: 'Docked on the left',
+    right: 'Docked on the right', free: 'Floating' };
+
+  // The glass of the bar, panels and messages: clarity sets how see-through and how blurred it
+  // is, and the tint and shape apply to all of them.
+  function applyGlass() {
     if (!ui) return;
-    open ??= ui.opts.panel.hidden;
-    if (open) toggleMap(false);
-    ui.opts.panel.hidden = !open;
-    ui.optsBtn.classList.toggle('on', open);
-    ui.optsBtn.setAttribute('aria-pressed', String(open));
+    const c = Math.max(0, Math.min(100, settings.glassClarity)) / 100;
+    ui.root.style.setProperty('--glass-a', (0.35 + 0.6 * c).toFixed(3));
+    ui.root.style.setProperty('--panel-a', (0.62 + 0.34 * c).toFixed(3)); // panels stay readable over the page
+    ui.root.style.setProperty('--blur', `${Math.round(10 + 30 * c)}px`);
+    ui.look.clarity.style.setProperty('--v', settings.glassClarity);
+    ui.root.classList.toggle('tinted', !!settings.glassTint);
+    ui.root.classList.toggle('rounded', settings.barShape === 'rounded');
+    ui.root.classList.toggle('locked', !!settings.lockDock);
+  }
+
+  // Color the player, the play buttons on the page, and the logo with the chosen palette.
+  function applyLook() {
+    if (!ui) return;
+    const pal = lookPalette();
+    const vars = { '--g1': pal.g[0], '--g2': pal.g[1], '--a-l': pal.accent[0], '--a-d': pal.accent[1], '--t-l': pal.text[0], '--t-d': pal.text[1] };
+    for (const el of [ui.root, pointer?.host]) {
+      if (el) for (const [k, v] of Object.entries(vars)) el.style.setProperty(k, v);
+    }
+    if (!ui.logo.raf) drawLogoFrame(ui.logo, performance.now());
+    for (const [key, { canvas }] of Object.entries(ui.look.shapes)) {
+      WREN_MARK.draw(canvas.getContext('2d'), canvas.width, { shape: key, color: settings.color, round: true });
+    }
+    applyGlass();
+    applyDisplaySettings(); // the click-to-read underline
+    updateOptionsUI();
   }
 
   // Scrolling by hand stops the page following the reading, until "Back to reading".
   function setDetached(detached) {
     if (state.detached === detached) return;
     state.detached = detached;
-    if (ui) ui.backBtn.hidden = !detached;
+    if (ui) {
+      ui.backBtn.hidden = !detached;
+      layoutUI(); // the bar changed size
+    }
     updateFocus();
   }
 
@@ -1348,38 +1872,53 @@
     if (ui && state.playing && settings.follow && !state.detached) setDetached(true);
   }
 
+  // ---------- Voices ----------
+
+  // "AI: Heart (US, female)" -> "Heart", "Microsoft Aria Online (Natural) - English" -> "Aria".
+  function shortVoiceName(name) {
+    return name.replace(/^AI: /, '').replace(/^(Microsoft|Google) /, '').split(/ [(-]/)[0];
+  }
+
   function populateVoices() {
     if (!ui) return;
-    const sel = ui.voiceSelect;
-    sel.replaceChildren();
     const lang = pageLang();
     const all = usableVoices();
     const ai = all.filter((v) => v.engine === 'ai');
     const voices = all.filter((v) => v.engine !== 'ai').sort((a, b) => a.voiceName.localeCompare(b.voiceName));
     const mine = voices.filter((v) => v.lang.toLowerCase().startsWith(lang));
     const other = voices.filter((v) => !mine.includes(v));
+    const items = [];
     const addGroup = (label, list, strip = '') => {
       if (!list.length) return;
-      const group = h('optgroup', { label });
-      for (const v of list) group.append(h('option', { value: v.voiceName, textContent: v.voiceName.replace(strip, '') }));
-      sel.append(group);
+      items.push(h('div', { className: 'label', textContent: label }));
+      for (const v of list) {
+        const b = h('button', { className: 'voice', type: 'button', title: v.voiceName },
+          h('span', { textContent: v.voiceName.replace(strip, '') }), h('small', { textContent: v.lang }));
+        b.dataset.voice = v.voiceName;
+        b.addEventListener('click', () => setVoice(v.voiceName));
+        items.push(b);
+      }
     };
     addGroup('Natural AI voices (English)', ai, 'AI: ');
     addGroup('Built-in voices: page language', mine);
     addGroup('Built-in voices: other languages', other);
-    const current = currentVoice();
-    if (current) sel.value = current.voiceName;
+    ui.voiceList.replaceChildren(...items);
+    updateVoiceUI();
   }
 
-  function toggleMap(open) {
+  function updateVoiceUI() {
     if (!ui) return;
-    open ??= ui.mapPanel.hidden;
-    if (open) toggleOptions(false);
-    ui.mapPanel.hidden = !open;
-    ui.mapBtn.classList.toggle('on', open);
-    ui.mapBtn.setAttribute('aria-pressed', String(open));
-    if (open) updateMapCurrent(true);
+    const name = currentVoice()?.voiceName || '';
+    ui.voiceLabel.textContent = name ? shortVoiceName(name) : 'Voice';
+    ui.voiceBtn.title = name ? `Voice: ${name.replace(/^AI: /, '')}` : 'Voice';
+    for (const b of ui.voiceList.querySelectorAll('button.voice')) {
+      b.classList.toggle('on', b.dataset.voice === name);
+      b.setAttribute('aria-pressed', String(b.dataset.voice === name));
+    }
+    layoutUI(); // the name changes the bar's width
   }
+
+  // ---------- Page map ----------
 
   function renderMap() {
     if (!ui) return;
@@ -1387,7 +1926,8 @@
     const minLevel = Math.min(...state.sections.map((s) => s.level));
     const rows = state.sections.map((sec) => {
       const count = sectionItems(sec).length;
-      const check = h('input', { type: 'checkbox', checked: sec.enabled, title: sec.enabled ? 'Skip this section' : 'Read this section' });
+      const check = h('input', { type: 'checkbox', className: 'check', checked: sec.enabled,
+        title: sec.enabled ? 'Skip this section' : 'Read this section' });
       check.addEventListener('change', () => setSectionEnabled(sec, check.checked));
       const title = h('button', { className: 'title', type: 'button', textContent: sec.title, title: sec.title, disabled: !count });
       title.addEventListener('click', () => jumpToSection(sec));
@@ -1419,18 +1959,46 @@
     }
   }
 
-  function setStatus(text) {
+  // ---------- Status ----------
+
+  // The sentence count sits on the bar. Messages ("Finished", "Loading AI voice 40%") replace it;
+  // on a vertical bar, where there's no room, they show in a bubble beside it for a few seconds.
+  const TOAST_TIME = 4000;
+
+  function setStatus(text, isMessage = true) {
     if (!ui) return;
     ui.statusText = text;
     ui.status.textContent = text;
+    showToast(isMessage && ui.root.classList.contains('vertical') ? text : '');
+  }
+
+  // A bubble beside the bar for a few seconds ('' hides it).
+  function showToast(text) {
+    if (!ui) return;
+    clearTimeout(ui.toastTimer);
+    ui.toastText = text;
+    ui.toast.textContent = text;
+    layoutUI();
+    if (!text) return;
+    ui.toastTimer = setTimeout(() => {
+      if (!ui) return;
+      ui.toastText = '';
+      layoutUI();
+    }, TOAST_TIME);
   }
 
   function updateUI() {
     if (!ui) return;
     ui.playBtn.replaceChildren(icon(state.playing ? 'pause' : 'play'));
+    setLogoPlaying(ui.logo, state.playing);
+    if (ui.iconPlaying !== state.playing) {
+      ui.iconPlaying = state.playing;
+      send({ type: 'iconState', playing: state.playing });
+    }
     ui.rateLabel.textContent = settings.rate.toFixed(1) + '×';
     const total = state.queue.length;
-    if (total && state.idx < total) setStatus(`${state.idx + 1} / ${total}`);
+    ui.ring.style.setProperty('--p', total ? Math.min(state.idx, total) / total : 0);
+    if (total && state.idx < total) setStatus(`${state.idx + 1} / ${total}`, false);
     updateMapCurrent();
   }
 
@@ -1442,13 +2010,16 @@
       } catch {
         // Fall back to defaults.
       }
+      // Jump straight to the remembered spot rather than gliding there.
+      ui?.bar.classList.add('instant');
+      layoutUI();
+      requestAnimationFrame(() => ui?.bar.classList.remove('instant'));
       const voices = await send({ type: 'getVoices' });
       state.voices = Array.isArray(voices) ? voices : [];
       populateVoices();
     }
-    applyDisplaySettings();
+    applyLook();
     colorSelectionButton();
-    updateOptionsUI();
     updateUI();
   }
 
@@ -1467,6 +2038,15 @@
     window.removeEventListener('click', onAltClick, true);
     window.removeEventListener('click', onPageClick, true);
     removePointerButtons();
+    if (ui?.iconPlaying) {
+      ui.iconPlaying = false; // first, so an error from send can't bring us back here
+      send({ type: 'iconState', playing: false });
+    }
+    if (ui) {
+      cancelAnimationFrame(ui.logo.raf);
+      clearTimeout(ui.toastTimer);
+    }
+    window.removeEventListener('resize', layoutUI);
     ui?.host.remove();
     ui = null;
   }
@@ -1479,6 +2059,7 @@
     if (e.key === 'Escape') {
       hideSelectionButton();
       hideParagraphButton();
+      closePanels();
     }
     if (!e.altKey && !e.ctrlKey && !e.metaKey && SCROLL_KEYS.has(e.key) && !e.target.closest?.(INTERACTIVE_SEL)) onUserScroll();
     if (!e.altKey || !e.shiftKey || e.ctrlKey || e.metaKey) return;
@@ -1594,9 +2175,9 @@
 
   const POINTER_CSS = `
     button { all: unset; position: fixed; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%;
-      background: #4f8cff; color: #fff; box-shadow: 0 2px 10px rgba(0,0,0,.3); cursor: pointer; }
-    button:hover { background: #3f7cf0; }
-    button:focus-visible { outline: 2px solid #8ab4ff; outline-offset: 2px; }
+      background: linear-gradient(135deg, var(--g1, #ffb547), var(--g2, #ff5e3a)); color: #fff; box-shadow: 0 2px 10px rgba(0,0,0,.3); cursor: pointer; }
+    button:hover { filter: brightness(1.07); }
+    button:focus-visible { outline: 2px solid var(--g2, #ff5e3a); outline-offset: 2px; }
     button[hidden] { display: none; }
     button.sel { color: #111; }
     button.sel:hover { filter: brightness(.93); }

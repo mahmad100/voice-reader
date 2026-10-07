@@ -1,4 +1,4 @@
-# Voice Reader
+# Wren
 
 A Chrome extension that reads web pages aloud and highlights each sentence and word as it is spoken. It can use built-in voices or natural AI voices that run on your own computer.
 
@@ -9,7 +9,7 @@ Current status and next steps are in [PROGRESS.md](PROGRESS.md).
 1. Open `chrome://extensions`.
 2. Turn on **Developer mode** (top right).
 3. Click **Load unpacked** and choose this `voice-reader` folder.
-4. Pin the extension (puzzle-piece icon → pin) so the speaker icon is always visible.
+4. Pin the extension (puzzle-piece icon → pin) so the Wren icon is always visible.
 
 After changing any file, click the reload arrow on the extension's card in `chrome://extensions`, then refresh the page you're reading.
 
@@ -25,18 +25,33 @@ After changing any file, click the reload arrow on the extension's card in `chro
 | Read from a paragraph | **Alt+click** it, or turn on paragraph play buttons in Options |
 | Previous / next sentence | **Alt+Shift+←** / **Alt+Shift+→** |
 | Slower / faster | **Alt+Shift+↓** / **Alt+Shift+↑**, or **−** / **+** on the bar |
+| Choose a voice | The voice button on the bar (it shows the voice's name) |
 | Page map / Options | The list and ⚙ buttons on the bar |
+| Move the player | Drag it by the logo or any empty part of the bar |
+| Change the logo, color, glass or position | Click the logo on the bar |
 | Close the player | **×** on the bar |
 
-Your speed, voice and Options choices are remembered. The page map and Options panels start closed. To change the start/pause shortcut, go to `chrome://extensions/shortcuts`.
+Your speed, voice, Options choices and where you put the player are remembered. The page map, voice and Options panels start closed, and Esc closes them. To change the start/pause shortcut, go to `chrome://extensions/shortcuts`.
+
+## The player
+
+A frosted-glass bar that follows your system's light or dark mode. The ring around the play button fills as you get through the article, and the logo moves gently while it reads.
+
+- **Appearance:** click the round logo to choose it (Soundtail, Songbird or Wave) and a color (Ember, Rose, Dusk, Moss or Ink). The color runs through the whole player, the play buttons on the page, and the toolbar icon. The same panel has:
+  - **Position:** a small picture of the screen. Tap an edge to send the player there. **Lock position** stops it being dragged (like an iPhone's rotation lock); a lock badge shows on the logo, and a drag makes the bar shake.
+  - **Glass:** a slider from clear to frosted, pill or rounded corners, and a tint in your color. These apply to the bar, the panels and the message bubbles alike; panels stay a little more solid than the bar so their text stays readable.
+
+- **Docking:** push either end of the bar up to the left or right side and it turns into a vertical strip there, wherever you're holding it. Pull it a little way back out and it turns horizontal again. Near the top or bottom edge it docks there horizontally. Anywhere else it floats where you drop it.
+- **Panels:** Appearance, the page map, voices and Options open on the side facing the page. Only one is open at a time. Scrolling a panel never scrolls the page behind it.
+- **Messages:** on a vertical bar there's no room for "Finished" or "Loading AI voice", so they show in a bubble beside it for a few seconds.
 
 ## Starting where you point
 
 Modeled on Speechify and NaturalReader. Each one can be switched on or off in **Options** (⚙ on the bar).
 
 - **Click to read** (on by default): with the player open, click any text and reading starts from that word. A dotted underline shows where a click would start. Links, buttons and text boxes keep working as usual. A double-click still just selects a word. Text outside the article (a caption, a sidebar) works too: it's added to the page map as "Clicked text" instead of replacing the map.
-- **Play button on selected text** (on by default): select at least a few characters and, once you let go of the mouse, a play button appears next to the selection in your highlight color. It reads just the selection, then stops at "Finished selection". Pressing play again carries on from just after it.
-- **Play buttons beside paragraphs** (off by default): rest the pointer on a paragraph and a blue play button appears in its margin. It doesn't appear for the paragraph already being read.
+- **Play button on selected text** (on by default): select at least a few characters and, once you let go of the mouse, a play button appears next to the selection in your highlight color. It reads just the selection, then stops at "Finished selection". Selecting a whole paragraph (a triple-click) reads all of it, even when it ends on a citation like "[1]". Pressing play again carries on from just after it.
+- **Play buttons beside paragraphs** (off by default): rest the pointer on a paragraph and a play button in your Wren color appears in its margin. It doesn't appear for the paragraph already being read.
 
 Buttons that appear on hover follow the Nielsen Norman Group's timing guidance, so they don't flicker as the pointer passes over the page: they show after the pointer has rested for 0.4 s, and go 0.5 s after it leaves.
 
@@ -51,7 +66,7 @@ Choices aimed at dyslexic readers, all in **Options**:
 
 ## Page map
 
-The page map lists the article's sections, one per heading, nested by level, with the number of sentences in each. The section being read is marked in yellow.
+The page map lists the article's sections, one per heading, nested by level, with the number of sentences in each. The section being read is marked in orange.
 
 - **Tick or untick** a section to include or skip it. Unticking the section being read moves on to the next ticked one.
 - **Click a title** to jump there and start reading. This also ticks it if it was unticked.
@@ -85,6 +100,7 @@ The voice menu's first group, **Natural AI voices**, uses [Kokoro](https://huggi
 - Reading can start or stop partway through a sentence (a clicked word, the end of a selection). That part is spoken as its own piece, and highlighted from the right place.
 - Voices that report word positions (for example the Windows "Microsoft …" voices) get exact word highlighting. For voices that don't (for example "Google US English"), the highlight follows an estimate based on that voice's measured speaking speed. For AI voices, the estimate is timed against the exact length of each audio clip.
 - `math-speech.js` turns equations (MathML) and math symbols into spoken English. It is injected just before `content.js`, which keeps two versions of the text: what's spoken, and where each part sits on the page, so an equation spoken as several words is highlighted as one unit.
+- `wren-mark.js` draws the three logos and holds the five color palettes. The logo moves slowly while reading, on the player bar (in a circle) and in the toolbar icon (a rounded square). `background.js` sets the toolbar icon to the chosen logo. The PNG icons in `icons/` are Soundtail in Ember; after changing the drawing, run `node icons/build.mjs` to remake them with Chrome.
 - `offscreen/` holds the AI voice engine: a hidden extension page (`offscreen.js`) that runs Kokoro on the GPU and plays the audio. It makes one clip at a time: what the reader is waiting to hear goes first, and read-ahead comes after. `kokoro.bundle.js` and `ort/` are generated files; don't edit them by hand.
 
 ### Rebuilding the AI voice bundle
@@ -97,7 +113,7 @@ npm update kokoro-js
 node build.mjs
 ```
 
-## Known limits (v0.5)
+## Known limits (v0.6)
 
 - **Can't run on:** Chrome's built-in PDF viewer, `chrome://` pages, or the Chrome Web Store. Google Docs draws its text in a way the extension can't read yet.
 - **Speed limits:** Google voices top out around 2× speed. Windows voices go faster.
@@ -112,3 +128,5 @@ node build.mjs
 - PDF support with PDF.js
 - Google Docs support
 - Skip-content switches (citations, brackets, URLs), like Speechify's
+- True pause and resume, from the exact word
+- Auto-hide (the player shrinks to its logo while reading) and a size setting for the player

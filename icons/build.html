@@ -1,0 +1,16 @@
+<!doctype html>
+<!-- Exports the toolbar icons from wren-mark.js. Run icons/build.mjs (needs Chrome); don't open by hand. -->
+<meta charset="utf-8">
+<script src="../wren-mark.js"></script>
+<pre id="out"></pre>
+<script>
+  // Size and transparent padding (the Web Store wants 16px around the 128px art).
+  const out = {};
+  for (const [size, pad] of [[16, 0], [32, 1], [48, 2], [128, 16]]) {
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    WREN_MARK.draw(c.getContext('2d'), size, { pad });
+    out[size] = c.toDataURL('image/png');
+  }
+  document.getElementById('out').textContent = JSON.stringify(out);
+</script>

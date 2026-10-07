@@ -1,4 +1,4 @@
-// Voice Reader AI voice engine. Runs in an offscreen document (a hidden extension page) because
+// Wren AI voice engine. Runs in an offscreen document (a hidden extension page) because
 // the Kokoro model needs WebGPU and audio playback, which the service worker doesn't have.
 // It turns sentences into audio on this computer, plays them, and reads ahead a few sentences
 // so playback doesn't stall.
