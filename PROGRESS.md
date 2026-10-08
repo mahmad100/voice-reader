@@ -104,6 +104,7 @@ My own Speechify replacement: a Chrome extension that reads pages aloud with sen
 - **Commit history cleaned:** the `Co-Authored-By: Claude` line was removed from every commit and the history force-pushed. All commits are by Mohammad Ahmadi only, and the contributor list shows only mahmad100. From now on, commits carry no Claude attribution.
 - **AI voice build folder** renamed `voice-reader-build` → `wren-build`. `build.mjs` now writes into `Projects/wren`, and the package is named `wren-build`.
 - **Project folder:** not renamed yet. Windows said it was "in use" (Claude Code was running inside it, and VS Code and Chrome may hold it too). The user is renaming it by hand.
+- **License:** GPL-3.0-or-later (`LICENSE`), chosen by the user because the AI voice bundle includes eSpeak NG (GPL-3.0, via `phonemizer`). Credits and licenses for the bundled code (kokoro-js, Transformers.js, phonemizer, eSpeak NG: Apache-2.0/GPL-3.0; onnxruntime-web: MIT) are in `THIRD_PARTY_NOTICES.md`, with the Apache text in `licenses/Apache-2.0.txt`. Update the versions there when the bundle is rebuilt.
 - Left alone on purpose: the internal `voice-reader-…` IDs in `content.js` (page element and highlight names nobody sees).
 
 ## Next session: start here

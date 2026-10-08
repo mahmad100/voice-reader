@@ -130,3 +130,11 @@ node build.mjs
 - Google Docs support
 - Skip-content switches (citations, brackets, URLs), like Speechify's
 - A size setting for the player (small, medium, large)
+
+## License
+
+Copyright (C) 2026 Mohammad Ahmadi.
+
+Wren is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. It is distributed in the hope that it will be useful, but without any warranty. See [LICENSE](LICENSE) for the full text.
+
+The AI voice engine includes open-source code from other projects (Kokoro, Transformers.js, phonemizer, eSpeak NG, ONNX Runtime). Their licenses and credits are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). GPL-3.0 was chosen because eSpeak NG, which turns text into speech sounds for the AI voices, is GPL-3.0.
