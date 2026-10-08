@@ -35,7 +35,7 @@ My own Speechify replacement: a Chrome extension that reads pages aloud with sen
 
 **Tested v0.2 AI voices:** reads on its own with Heart at 1× and 2×, no stalls. Sounded good to the user.
 
-**Put the project on GitHub:** https://github.com/mahmad100/voice-reader (public, branch `main`).
+**Put the project on GitHub:** https://github.com/mahmad100/wren (public, branch `main`).
 
 **Built v0.3: page map** (button on the bar, or Alt+Shift+M)
 - Sections come from the article's headings. "References" onwards starts unticked, so the default reading is unchanged (still 225 sentences on "Dyslexia").
@@ -67,7 +67,7 @@ My own Speechify replacement: a Chrome extension that reads pages aloud with sen
 
 ## Session 2 (2026-10-07)
 
-**Renamed to Wren** (was "Voice Reader"): extension name, page titles, log tags and docs. The folder and the GitHub repo are still called `voice-reader`.
+**Renamed to Wren** (was "Voice Reader"): extension name, page titles, log tags and docs. The folder and the GitHub repo were renamed `wren` too (were `voice-reader`).
 
 **Logo:** picked "Soundtail" (in orange) from three ideas: a wren whose cocked tail is a fan of three sound-level bars. `wren-mark.js` draws it. It's on the player bar, and while reading its tail sways slowly. It eases in and out instead of starting or stopping suddenly. The toolbar icon sways too. The PNG icons are made from the same drawing (`node icons/build.mjs`). The tail went through a few shapes: side-by-side bars looked like a hand, and a fan from one point reads as a tail.
 
@@ -115,7 +115,7 @@ My own Speechify replacement: a Chrome extension that reads pages aloud with sen
 
 ## Where things live
 
-- Extension (load this folder in Chrome): `Projects/voice-reader/`
-- GitHub (public): https://github.com/mahmad100/voice-reader. The GitHub CLI is at `%LOCALAPPDATA%\Microsoft\WinGet\Packages\GitHub.cli_*\bin\gh.exe`, logged in as mahmad100.
+- Extension (load this folder in Chrome): `Projects/wren/`
+- GitHub (public): https://github.com/mahmad100/wren. The GitHub CLI is at `%LOCALAPPDATA%\Microsoft\WinGet\Packages\GitHub.cli_*\bin\gh.exe`, logged in as mahmad100.
 - AI voice build tooling (kept outside OneDrive): `C:\Users\mahmad10\voice-reader-build` → `node build.mjs`
 - Details on using it and how it works: `README.md`

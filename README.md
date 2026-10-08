@@ -8,7 +8,7 @@ Current status and next steps are in [PROGRESS.md](PROGRESS.md).
 
 1. Open `chrome://extensions`.
 2. Turn on **Developer mode** (top right).
-3. Click **Load unpacked** and choose this `voice-reader` folder.
+3. Click **Load unpacked** and choose this `wren` folder.
 4. Pin the extension (puzzle-piece icon → pin) so the Wren icon is always visible.
 
 After changing any file, click the reload arrow on the extension's card in `chrome://extensions`, then refresh the page you're reading.
