@@ -80,6 +80,7 @@
     voiceKey: 'default',
     startedAt: 0,
     sawWord: false,
+    readAhead: [],    // AI voices: the sentences being prepared ahead of the one playing
     errors: 0,
     timers: [],
   };
@@ -764,11 +765,64 @@
     state.watchdog = setTimeout(() => { if (id === state.gen) advance(); }, ms);
   }
 
+  // Where to end the first piece of a sentence spoken from start to end: after a comma, semicolon,
+  // colon or dash that leaves a few words on each side, so the break falls where a reader would
+  // pause anyway. A sentence without one, or with an equation, isn't split.
+  const PIECE_MIN_WORDS = 4;
+  const PIECE_MAX_WORDS = 14;
+  function firstPieceEnd(item, start, end) {
+    if (equationsIn(item, start, end).length) return end;
+    const text = item.text.slice(start - item.start, end - item.start);
+    const re = /\S+/g;
+    const words = [];
+    for (let m; (m = re.exec(text));) words.push([m.index, m[0]]);
+    for (let w = PIECE_MIN_WORDS - 1; w < Math.min(PIECE_MAX_WORDS, words.length - PIECE_MIN_WORDS); w++) {
+      if (/[,;:—–]$/.test(words[w][1])) return start + words[w + 1][0];
+    }
+    return end;
+  }
+
+  // Where an AI voice's clip starting at `start` ends: a sentence prepared ahead is spoken whole.
+  function pieceEnd(base, start, end) {
+    const prepared = start === base.start && end === base.end && state.readAhead.includes(base);
+    return prepared ? end : firstPieceEnd(base, start, end);
+  }
+
+  // An AI voice takes about a second to make a clip, so where reading is likely to start next (the
+  // word under a resting pointer, a paragraph's play button, a mouse press) is prepared before the
+  // click lands. The clip made is exactly the one speakCurrent will ask for.
+  const PREPARE_DELAY = 200; // ms the pointer rests on a word first, so sweeping across text doesn't
+  let prepareTimer = null;
+  let preparedText = null;
+  function prepareFrom(idx, off) {
+    const voice = currentVoice();
+    const base = state.queue[idx];
+    if (voice?.engine !== 'ai' || state.aiUnavailable || !base) return;
+    const start = off > base.start && off < base.end ? off : base.start;
+    if (start === base.start && state.readAhead.includes(base)) return; // already being made
+    const text = base.text.slice(start - base.start, pieceEnd(base, start, base.end) - base.start);
+    if (`${voice.voiceName}|${text}` === preparedText) return;
+    preparedText = `${voice.voiceName}|${text}`;
+    send({ type: 'prepare', text, voiceName: voice.voiceName });
+  }
+
+  // The same starting point as a click there (see startAt). Text outside the queue isn't prepared.
+  function prepareAt(node, offset) {
+    const idx = findIndex(node, offset);
+    if (idx < 0) return;
+    const base = state.queue[idx];
+    const t = base.model.text;
+    let off = modelOffset(base.model, node, offset);
+    while (off > base.start && /\S/.test(t[off - 1])) off--;
+    prepareFrom(idx, off);
+  }
+
   // Speak the current sentence. Reading can start at a word partway through it (a click or a
   // selection): `from` is that word's offset. Without it, a restart of the same sentence (a speed
   // or voice change, or resuming when the voice couldn't hold its place) carries on from the word
   // being read.
-  function speakCurrent(from = null) {
+  // `rest` is set when this carries on from a first piece (see firstPieceEnd).
+  function speakCurrent(from = null, rest = null) {
     clearTimers();
     const base = state.queue[state.idx];
     if (!base) return finish();
@@ -776,9 +830,16 @@
     const start = from != null && from > base.start && from < base.end ? from : base.start;
     // Reading just a selection: the last sentence stops where the selection does.
     const end = state.limit?.item === base ? Math.max(start + 1, Math.min(base.end, state.limit.end)) : base.end;
-    const item = start === base.start && end === base.end
+    const voice = currentVoice();
+    const isAI = voice?.engine === 'ai';
+    // Reading from somewhere new with an AI voice: the sentence wasn't prepared ahead, so its first
+    // few words are spoken as their own piece, to be heard sooner. The rest is made while they play.
+    const cut = isAI && !rest ? pieceEnd(base, start, end) : end;
+    const slice = (a, b) => base.text.slice(a - base.start, b - base.start);
+    const item = start === base.start && cut === base.end
       ? base
-      : { ...base, start, end, text: base.text.slice(start - base.start, end - base.start), base };
+      : { ...base, start, end: cut, text: slice(start, cut), base };
+    if (cut < end) item.restOf = { start, end }; // the stretch the sentence highlight shows
     state.current = item;
     const id = ++state.gen;
     state.playing = true;
@@ -788,16 +849,17 @@
     state.clipDuration = 0;
     state.startedAt = 0;
     state.sawWord = false;
-    highlightSentence(item);
+    const shown = rest || item.restOf; // a split sentence is highlighted as a whole
+    highlightSentence(shown ? { ...item, ...shown } : item);
 
-    const voice = currentVoice();
     state.voiceKey = voice?.voiceName || 'default';
     if (voice?.eventTypes && !voice.eventTypes.includes('word') && !wordSupport.has(state.voiceKey)) {
       wordSupport.set(state.voiceKey, false);
     }
-    const isAI = voice?.engine === 'ai';
-    // AI voices prepare the next few sentences while this one plays.
-    const upcoming = isAI ? state.queue.slice(state.idx + 1, state.idx + 4).map((q) => q.text) : undefined;
+    // AI voices prepare the next few sentences while this one plays (after a first piece, its rest first).
+    state.readAhead = isAI ? state.queue.slice(state.idx + 1, state.idx + 4) : [];
+    const upcoming = isAI ? state.readAhead.map((q) => q.text) : undefined;
+    if (item.restOf) upcoming.unshift(slice(cut, end));
     send({ type: 'speak', id, text: item.text, rate: settings.rate, voiceName: voice?.voiceName, lang: voice?.lang, upcoming });
 
     armWatchdog(id, isAI ? 60000 : (item.text.length / (5 * settings.rate) + 10) * 1000);
@@ -857,6 +919,10 @@
       }
       case 'end':
         state.resuming = null;
+        if (item.restOf) {
+          speakCurrent(item.end, item.restOf); // the rest of the sentence, made while the first piece played
+          break;
+        }
         calibrate(item);
         if (!state.sawWord && !wordSupport.has(state.voiceKey)) wordSupport.set(state.voiceKey, false);
         advance();
@@ -1059,6 +1125,7 @@
 
   function setVoice(voiceName) {
     settings.voiceName = voiceName;
+    state.readAhead = []; // prepared in the old voice
     chrome.storage.sync.set({ voiceName }).catch(() => {});
     updateVoiceUI();
     if (state.playing) speakCurrent();
@@ -1386,7 +1453,10 @@
     .panel[hidden], .toast[hidden] { display: none; }
     @keyframes pop { from { opacity: 0; transform: scale(.96); } }
     .toast { padding: 8px 14px; border-radius: 999px; font-size: 12px; font-weight: 500; white-space: nowrap; pointer-events: none; }
-    .head { padding: 15px 18px 8px; font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
+    .head { position: relative; padding: 15px 46px 8px 18px; font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
+    .head button.close { position: absolute; top: 10px; right: 10px; color: var(--muted); }
+    .head button.close:hover { color: var(--fg); }
+    .head button.close svg { width: 16px; height: 16px; }
     .head small { display: block; margin-top: 3px; font-size: 12px; font-weight: 400; letter-spacing: 0; color: var(--muted); }
     .list { position: relative; overflow-y: auto; overscroll-behavior: contain; padding: 2px 8px 10px; scrollbar-width: thin; }
     .label { padding: 12px 10px 5px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
@@ -1508,11 +1578,11 @@
 
     const mapList = h('div', { className: 'list' });
     const mapPanel = h('div', { className: 'panel glass', hidden: true },
-      h('div', { className: 'head' }, 'Page map', h('small', { textContent: 'Tick the sections to read. Click a title to jump there.' })),
+      panelHead('Page map', 'Tick the sections to read. Click a title to jump there.'),
       mapList);
     const voiceList = h('div', { className: 'list' });
     const voicePanel = h('div', { className: 'panel glass', hidden: true },
-      h('div', { className: 'head' }, 'Voice', h('small', { textContent: 'Natural AI voices run on this computer.' })),
+      panelHead('Voice', 'Natural AI voices run on this computer.'),
       voiceList);
     const opts = buildOptions();
 
@@ -1802,6 +1872,12 @@
     if (ui && Object.values(ui.panels).some(({ panel }) => !panel.hidden)) togglePanel('map', false);
   }
 
+  // A panel's title and note, with a × to close it.
+  function panelHead(title, note) {
+    return h('div', { className: 'head' }, button('small close', 'Close', 'close', closePanels), title,
+      h('small', { textContent: note }));
+  }
+
   // ---------- Options panel ----------
 
   const SWITCHES = [
@@ -1854,7 +1930,7 @@
     }
     body.append(swatchRow, seg);
     const panel = h('div', { className: 'panel glass', hidden: true },
-      h('div', { className: 'head' }, 'Options', h('small', { textContent: 'Ways to start reading, and how reading looks.' })),
+      panelHead('Options', 'Ways to start reading, and how reading looks.'),
       body);
     return { panel, inputs, swatches, styles };
   }
@@ -1969,7 +2045,7 @@
     tint.addEventListener('change', () => setOption('glassTint', tint.checked));
 
     const panel = h('div', { className: 'panel glass', hidden: true },
-      h('div', { className: 'head' }, 'Appearance', h('small', { textContent: 'The logo, color, glass, and where the player sits.' })),
+      panelHead('Appearance', 'The logo, color, glass, and where the player sits.'),
       h('div', { className: 'list' },
         h('div', { className: 'label', textContent: 'Logo' }), shapeRow,
         h('div', { className: 'label', textContent: 'Color' }), colorRow,
@@ -2316,9 +2392,11 @@
   function updateHoverPreview(ev) {
     if (!hoverHL) return;
     hoverHL.clear();
+    clearTimeout(prepareTimer);
     if (!settings.clickToRead || ev.buttons || hasSelection() || ev.target.closest?.(INTERACTIVE_SEL)) return;
     const at = textAt(ev.clientX, ev.clientY);
     if (!at) return;
+    prepareTimer = setTimeout(() => prepareAt(at.node, at.offset), PREPARE_DELAY);
     const loc = locate(at.node, at.offset);
     if (loc) {
       const t = loc.item.model.text;
@@ -2527,6 +2605,8 @@
     const rect = block.getBoundingClientRect();
     pointer.paraBtn.hidden = false;
     place(pointer.paraBtn, rect.left - 32, rect.top);
+    const idx = state.queue.findIndex((it) => it.model.el === block);
+    if (idx >= 0) prepareFrom(idx, state.queue[idx].start);
   }
 
   function hideParagraphButton() {
@@ -2550,6 +2630,14 @@
     // Dragging the page's scrollbar counts as scrolling by hand.
     const doc = document.documentElement;
     if (e.clientX >= doc.clientWidth || e.clientY >= doc.clientHeight) onUserScroll();
+    // A press that may become a click to read: prepare from there now, in case the pointer
+    // didn't rest first.
+    if (ui && settings.clickToRead && e.button === 0 && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey &&
+        e.detail <= 1 && !overOurUI(e) && !e.target.closest?.(INTERACTIVE_SEL)) {
+      clearTimeout(prepareTimer);
+      const at = textAt(e.clientX, e.clientY);
+      if (at) prepareAt(at.node, at.offset);
+    }
   }
 
   function onScroll() {

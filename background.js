@@ -209,6 +209,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return;
     }
 
+    case 'prepare': {
+      // Make an AI voice clip for where reading is likely to start next (see prepareFrom in content.js).
+      const ai = AI_VOICES.find((v) => v.voiceName === msg.voiceName);
+      if (ai) {
+        ensureOffscreen().then(() => chrome.runtime.sendMessage({
+          target: 'offscreen', type: 'prepare', text: msg.text, voice: ai.aiVoice,
+        })).catch(() => {});
+      }
+      return;
+    }
+
     case 'stop':
       // Only the tab that is speaking may stop speech, so a paused tab can't cut off another.
       // (null means this worker restarted and lost track, so allow it.)

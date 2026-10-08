@@ -13,6 +13,7 @@ My own Speechify replacement: a Chrome extension that reads pages aloud with sen
 | v0.5 | Click to read, read just a selection, paragraph play buttons, Options panel (line focus, wider spacing, highlight colors, follow along) | ✅ Tested in Chrome. ⚠️ 4 last fixes not yet tried, see below |
 | v0.6 | Renamed Wren. Animated logo. Apple-style glass player you can drag and dock (vertical on the sides). Appearance panel: logo, color, position lock, glass | ✅ Used in Chrome by the user (appearance panel, glass, panels). ⚠️ Last 3 fixes not yet tried, see below |
 | v0.7 | True pause and resume (carries on mid-word), shrink when not in use (with an on/off button on the bar), position picker fix | ✅ Shrink and picker used in Chrome by the user. ⚠️ Pause/resume not yet tried with real voices |
+| v0.7+ | AI voice starts faster after a click (short first piece, clips prepared before the click), × to close panels | ✅ The user tried it in Chrome: "it works". ⚠️ Not measured with the prepare-ahead, see Session 5 |
 
 ## Session 1 (2026-10-05)
 
@@ -107,7 +108,21 @@ My own Speechify replacement: a Chrome extension that reads pages aloud with sen
 - **License:** GPL-3.0-or-later (`LICENSE`), chosen by the user because the AI voice bundle includes eSpeak NG (GPL-3.0, via `phonemizer`). Credits and licenses for the bundled code (kokoro-js, Transformers.js, phonemizer, eSpeak NG: Apache-2.0/GPL-3.0; onnxruntime-web: MIT) are in `THIRD_PARTY_NOTICES.md`, with the Apache text in `licenses/Apache-2.0.txt`. Update the versions there when the bundle is rebuilt.
 - Left alone on purpose: the internal `voice-reader-…` IDs in `content.js` (page element and highlight names nobody sees).
 
+## Session 5 (2026-10-07): faster start after a click, × on panels
+
+**× on panels:** Page map, Voice, Options and Appearance each have a × in the top-right corner that closes them (`panelHead` in `content.js`).
+
+**AI voice starting somewhere new (click, paragraph button, jump) took a few seconds.** The v0.5 fix (what you're waiting for goes to the front of the line) was still in place; the rest was the time to make the clip.
+- Measured in Chrome with temporary timing code (Bella/Fable, Dyslexia article): a clip costs about **0.75–0.9 s however short, plus ~14 ms per character**. 16 chars: 0.96 s, 30: 0.98 s, 51: 1.3 s, 115: 2.3 s, 126: 2.5 s. Kokoro already keeps the voice data in memory, so the fixed cost is the model run on the GPU. A click landed 1.9 s before sound: 0.3 s double-click wait (stretched by a hidden tab), ~1 s making the clip, plus the trip there and back.
+- **Short first piece:** a sentence that wasn't prepared ahead has its first words, up to a comma, semicolon, colon or dash leaving at least 4 words on each side (`firstPieceEnd`), spoken as their own clip. The rest is made while they play, and the whole sentence stays highlighted. Sentences with equations aren't split.
+- **Prepared before the click:** the word under a pointer resting 0.2 s, a paragraph whose play button appears, and the spot of a mouse press are sent as `prepare` (content → background → offscreen). The offscreen page makes that clip first and keeps only the latest guess waiting. The clip is exactly the one `speakCurrent` asks for on the click, so the click finds it ready.
+- The user tried it and said it works. Not measured after the prepare-ahead, because the test tab was covered by another window: Chrome then stops animation frames (the hover preview runs on them) and stretches a 0.3 s timer to 1 s.
+
+**Testing notes:** content-script `console.log` doesn't reach my console reader; write to `document.documentElement.dataset` instead and read it from the page. The Chrome window must be uncovered (side by side with the terminal), or `document.visibilityState` is `hidden` and timings are wrong. The test tab is opened in the Claude tab group; the user has to reload Wren and click the icon *in that tab*.
+
 ## Next session: start here
+
+0. **Measure the faster start** (window side by side, tab visible): click with and without resting first, while reading and while stopped. Listen for a gap where a sentence is split. If a resting pointer still waits, the guess may be waiting behind a clip already being made.
 
 1. **If the folder is still `Projects/voice-reader`, rename it to `wren`** (close Claude Code, VS Code's folder and maybe Chrome first). Then in `chrome://extensions` remove Wren and *Load unpacked* the `wren` folder, since Chrome remembers the old path. Saved Wren settings may reset. `node build.mjs` fails until the folder is renamed.
 2. **Try pause and resume with real voices:** a Windows voice (Microsoft …), Google US English, and an AI voice (Heart). Pause mid-sentence, wait, resume: it should carry on mid-word. Also pause for over 10 minutes with an AI voice (should resume from the word).

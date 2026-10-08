@@ -32,7 +32,7 @@ After changing any file, click the reload arrow on the extension's card in `chro
 | Shrink when not in use | The inward-arrows button next to **×** turns it on or off (highlighted when on) |
 | Close the player | **×** on the bar |
 
-Your speed, voice, Options choices and where you put the player are remembered. The page map, voice and Options panels start closed, and Esc closes them. To change the start/pause shortcut, go to `chrome://extensions/shortcuts`.
+Your speed, voice, Options choices and where you put the player are remembered. The page map, voice and Options panels start closed. The × in a panel's corner closes it, and so does Esc. To change the start/pause shortcut, go to `chrome://extensions/shortcuts`.
 
 ## The player
 
@@ -90,6 +90,7 @@ The voice menu's first group, **Natural AI voices**, uses [Kokoro](https://huggi
 - **First use:** downloads the model once (~330 MB). The player bar shows "Loading AI voice …%".
 - **After that:** it loads from Chrome's cache, and speech starts a few seconds after you press play.
 - **Read-ahead:** the next few sentences are prepared while the current one plays, so there are no pauses between sentences.
+- **Starting somewhere new:** each clip takes about a second to make, however short. So where you're likely to start is prepared before you click: the word under a resting pointer, a paragraph whose play button has appeared, or the spot you press the mouse on. And a sentence that wasn't prepared ahead has its first few words, up to a comma or similar, spoken as their own short clip, with the rest made while they play.
 - **Requirements:** a graphics chip with WebGPU (most laptops from the last few years). Without it, the reader switches to a built-in voice and says "AI voices unsupported here".
 - **Language:** English only (US and UK accents).
 - **Memory:** about 300 MB while in use. It's freed after 10 minutes without AI-voice reading.
@@ -103,7 +104,7 @@ The voice menu's first group, **Natural AI voices**, uses [Kokoro](https://huggi
 - Voices that report word positions (for example the Windows "Microsoft …" voices) get exact word highlighting. For voices that don't (for example "Google US English"), the highlight follows an estimate based on that voice's measured speaking speed. For AI voices, the estimate is timed against the exact length of each audio clip.
 - `math-speech.js` turns equations (MathML) and math symbols into spoken English. It is injected just before `content.js`, which keeps two versions of the text: what's spoken, and where each part sits on the page, so an equation spoken as several words is highlighted as one unit.
 - `wren-mark.js` draws the three logos and holds the five color palettes. The logo moves slowly while reading, on the player bar (in a circle) and in the toolbar icon (a rounded square). `background.js` sets the toolbar icon to the chosen logo. The PNG icons in `icons/` are Soundtail in Ember; after changing the drawing, run `node icons/build.mjs` to remake them with Chrome.
-- `offscreen/` holds the AI voice engine: a hidden extension page (`offscreen.js`) that runs Kokoro on the GPU and plays the audio. It makes one clip at a time: what the reader is waiting to hear goes first, and read-ahead comes after. `kokoro.bundle.js` and `ort/` are generated files; don't edit them by hand.
+- `offscreen/` holds the AI voice engine: a hidden extension page (`offscreen.js`) that runs Kokoro on the GPU and plays the audio. It makes one clip at a time: what the reader is waiting to hear goes first, then a guess at where you'll start next (only the latest guess is kept), then read-ahead. `kokoro.bundle.js` and `ort/` are generated files; don't edit them by hand.
 
 ### Rebuilding the AI voice bundle
 
@@ -120,7 +121,7 @@ node build.mjs
 - **Can't run on:** Chrome's built-in PDF viewer, `chrome://` pages, or the Chrome Web Store. Google Docs draws its text in a way the extension can't read yet.
 - **Speed limits:** Google voices top out around 2× speed. Windows voices go faster.
 - **Math:** matrices and multi-line derivations are read row by row, and very long equations can be hard to follow by ear. Equation boxes don't follow equations inside separately scrolling areas.
-- **AI voice after a jump:** if a sentence is already being generated, it finishes first (about 1–3 s).
+- **AI voice after a jump:** if a clip is already being made, it finishes first (up to about 1–2 s). A click with no pause on the word first, on a sentence with no comma near its start, waits about 1 s.
 - **Keyboard shortcuts:** only Alt+Shift+R and Alt+Shift+arrows. Alt+Shift+letter keys belong to many sites (on Wikipedia, Alt+Shift+O opens "Log in").
 
 ## Ideas for next versions

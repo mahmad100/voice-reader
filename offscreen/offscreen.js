@@ -116,7 +116,8 @@ async function speak({ id, text, voice, rate, upcoming = [] }) {
   // Drop read-ahead work that's no longer needed (e.g. the reader jumped elsewhere).
   const wanted = new Set([text, ...upcoming].map((t) => `${voice}|${t}`));
   for (const [key, entry] of clips) {
-    if (!entry.started && !wanted.has(key)) {
+    if (wanted.has(key)) entry.guessOnly = false;
+    else if (!entry.started && !entry.guessOnly) {
       clips.delete(key);
       cancel(entry);
     }
@@ -144,6 +145,23 @@ async function speak({ id, text, voice, rate, upcoming = [] }) {
     return;
   }
   if (current === id) emit(id, { type: 'start', duration: clip.duration / rate });
+}
+
+// Make a clip for where reading is likely to start next (the word under the pointer, say), ahead of
+// read-ahead, so a click there starts at once. Only the latest guess is kept waiting.
+let guess = null;
+function prepare({ text, voice }) {
+  const key = `${voice}|${text}`;
+  if (guess?.key === key) return;
+  if (guess?.guessOnly && !guess.started && !guess.cancelled) {
+    clips.delete(guess.key);
+    cancel(guess);
+  }
+  const known = clips.get(key);
+  const isNew = !known || known.cancelled;
+  getClip(text, voice, current, true).catch(() => {});
+  guess = clips.get(key);
+  if (guess && isNew) guess.guessOnly = true; // not needed by anything else, so it can be dropped
 }
 
 // Pause holds the clip where it is, so resume carries on mid-word. If there's nothing playing to
@@ -186,6 +204,7 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg.target !== 'offscreen') return;
   touch();
   if (msg.type === 'speak') speak(msg);
+  else if (msg.type === 'prepare') prepare(msg);
   else if (msg.type === 'pause') pauseAudio(msg.id);
   else if (msg.type === 'resume') resumeAudio(msg.id);
   else if (msg.type === 'stop') {
