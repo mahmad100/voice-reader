@@ -67,7 +67,7 @@ My own Speechify replacement: a Chrome extension that reads pages aloud with sen
 
 ## Session 2 (2026-10-07)
 
-**Renamed to Wren** (was "Voice Reader"): extension name, page titles, log tags and docs. The folder and the GitHub repo were renamed `wren` too (were `voice-reader`).
+**Renamed to Wren** (was "Voice Reader"): extension name, page titles, log tags and docs. The folder and GitHub repo were still `voice-reader` then; see Session 4.
 
 **Logo:** picked "Soundtail" (in orange) from three ideas: a wren whose cocked tail is a fan of three sound-level bars. `wren-mark.js` draws it. It's on the player bar, and while reading its tail sways slowly. It eases in and out instead of starting or stopping suddenly. The toolbar icon sways too. The PNG icons are made from the same drawing (`node icons/build.mjs`). The tail went through a few shapes: side-by-side bars looked like a hand, and a fan from one point reads as a tail.
 
@@ -98,18 +98,27 @@ My own Speechify replacement: a Chrome extension that reads pages aloud with sen
 
 **Fixed:** with shrinking on, tapping an edge in the position picker (or dragging) from a side to the top or bottom left the bar parked high above the edge: the hidden controls kept their vertical-bar heights while the bar was measured. Also, opening a panel while shrunk now always expands the bar.
 
+## Session 4 (2026-10-07): renamed everything to Wren
+
+- **GitHub repo** renamed `voice-reader` → `wren` (https://github.com/mahmad100/wren). Old links redirect.
+- **Commit history cleaned:** the `Co-Authored-By: Claude` line was removed from every commit and the history force-pushed. All commits are by Mohammad Ahmadi only, and the contributor list shows only mahmad100. From now on, commits carry no Claude attribution.
+- **AI voice build folder** renamed `voice-reader-build` → `wren-build`. `build.mjs` now writes into `Projects/wren`, and the package is named `wren-build`.
+- **Project folder:** not renamed yet. Windows said it was "in use" (Claude Code was running inside it, and VS Code and Chrome may hold it too). The user is renaming it by hand.
+- Left alone on purpose: the internal `voice-reader-…` IDs in `content.js` (page element and highlight names nobody sees).
+
 ## Next session: start here
 
-1. **Try pause and resume with real voices:** a Windows voice (Microsoft …), Google US English, and an AI voice (Heart). Pause mid-sentence, wait, resume: it should carry on mid-word. Also pause for over 10 minutes with an AI voice (should resume from the word).
-2. **Check the last v0.6 fixes in Chrome:** scrolling inside a panel (shouldn't move the page), the Both/Sentence/Word switch, and triple-clicking a paragraph then pressing its play button (should read the whole paragraph). Also try the glass slider and a locked drag by hand.
-3. **Check the four v0.5 fixes**, still never tried in Chrome:
+1. **If the folder is still `Projects/voice-reader`, rename it to `wren`** (close Claude Code, VS Code's folder and maybe Chrome first). Then in `chrome://extensions` remove Wren and *Load unpacked* the `wren` folder, since Chrome remembers the old path. Saved Wren settings may reset. `node build.mjs` fails until the folder is renamed.
+2. **Try pause and resume with real voices:** a Windows voice (Microsoft …), Google US English, and an AI voice (Heart). Pause mid-sentence, wait, resume: it should carry on mid-word. Also pause for over 10 minutes with an AI voice (should resume from the word).
+3. **Check the last v0.6 fixes in Chrome:** scrolling inside a panel (shouldn't move the page), the Both/Sentence/Word switch, and triple-clicking a paragraph then pressing its play button (should read the whole paragraph). Also try the glass slider and a locked drag by hand.
+4. **Check the four v0.5 fixes**, still never tried in Chrome:
    - Starting mid-sentence (click or selection) with an AI voice took 25+ s, because the voice prepared sentences strictly in order. `offscreen.js` now puts what you're waiting for first. Expected: a 1–3 s wait at most.
    - The paragraph play button never went away if the pointer kept moving after leaving the paragraph. It now goes 0.5 s after leaving.
    - Line focus dimmed the whole page while scrolled away from the sentence being read. It now steps aside.
    - A reader left open during an extension reload got stuck in an endless loop of errors (an old bug).
-4. My tests switched on line focus, wider spacing and a green highlight in the user's settings. Switch them back in Options if not wanted.
-5. **Listen to math on a few more pages** and tune the wording: Wikipedia "Normal distribution", "Schrödinger equation", "Quadratic formula". Open questions: say "capital" for Δ vs δ? Absolute value bars |x| are silent.
-6. Other ideas: skip-content switches (citations, brackets, URLs), a size setting for the player, tables read row by row, PDF support (PDF.js), Google Docs.
+5. My tests switched on line focus, wider spacing and a green highlight in the user's settings. Switch them back in Options if not wanted.
+6. **Listen to math on a few more pages** and tune the wording: Wikipedia "Normal distribution", "Schrödinger equation", "Quadratic formula". Open questions: say "capital" for Δ vs δ? Absolute value bars |x| are silent.
+7. Other ideas: skip-content switches (citations, brackets, URLs), a size setting for the player, tables read row by row, PDF support (PDF.js), Google Docs.
 
 **Testing note:** my Chrome tool can't press browser-level shortcuts or the toolbar icon, and Alt+Shift+letter keys hit the page's own shortcuts. The user has to reload the extension and click the icon; after that I can drive the player bar.
 
