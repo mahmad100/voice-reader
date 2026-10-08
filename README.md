@@ -107,10 +107,10 @@ The voice menu's first group, **Natural AI voices**, uses [Kokoro](https://huggi
 
 ### Rebuilding the AI voice bundle
 
-The bundle is built in `C:\Users\mahmad10\voice-reader-build`. That folder is kept outside OneDrive so OneDrive doesn't sync `node_modules`. To update Kokoro:
+The bundle is built in `C:\Users\mahmad10\wren-build`. That folder is kept outside OneDrive so OneDrive doesn't sync `node_modules`. To update Kokoro:
 
 ```
-cd C:\Users\mahmad10\voice-reader-build
+cd C:\Users\mahmad10\wren-build
 npm update kokoro-js
 node build.mjs
 ```

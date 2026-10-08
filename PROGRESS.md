@@ -117,5 +117,5 @@ My own Speechify replacement: a Chrome extension that reads pages aloud with sen
 
 - Extension (load this folder in Chrome): `Projects/wren/`
 - GitHub (public): https://github.com/mahmad100/wren. The GitHub CLI is at `%LOCALAPPDATA%\Microsoft\WinGet\Packages\GitHub.cli_*\bin\gh.exe`, logged in as mahmad100.
-- AI voice build tooling (kept outside OneDrive): `C:\Users\mahmad10\voice-reader-build` → `node build.mjs`
+- AI voice build tooling (kept outside OneDrive): `C:\Users\mahmad10\wren-build` → `node build.mjs`
 - Details on using it and how it works: `README.md`
